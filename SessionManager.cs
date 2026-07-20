@@ -26,6 +26,10 @@ namespace ClaudeBuddy
 
         [JsonPropertyName("tty")]
         public string Tty { get; set; } = "";
+
+        // Windows hook only: PID of the terminal process that owns a window.
+        [JsonPropertyName("term_pid")]
+        public int TermPid { get; set; }
     }
 
     // Watches %TEMP%\claude_buddy\<session_id>.txt (one per running Claude
