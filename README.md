@@ -106,14 +106,18 @@ The two snippets do the same thing and differ only in how they invoke
 and states are identical.
 
 **If you already have a `hooks` block with other events in it**, don't
-replace the whole thing — add `Notification`, `UserPromptSubmit`,
-`PreToolUse`, `Stop`, and `SessionEnd` as sibling keys inside your existing
-`hooks` object, and if you already have any of those five keys, append
-these entries to their existing arrays instead of overwriting them.
+replace the whole thing — add `SessionStart`, `Notification`,
+`UserPromptSubmit`, `PreToolUse`, `Stop`, and `SessionEnd` as sibling keys
+inside your existing `hooks` object, and if you already have any of those
+six keys, append these entries to their existing arrays instead of
+overwriting them.
 
 What each hook does — every one of them invokes `ClaudeBuddyHook.ps1
 -State <idle|generating|waiting>`, which reads `session_id` and `cwd` off
 the hook's own stdin JSON and writes/updates that session's status file:
+- **`SessionStart`**: fires when a Claude Code session starts (including
+  `/clear` and `/compact`, which re-fire it) → `idle`, so the orb appears
+  right away instead of waiting for the first prompt or tool call.
 - **`UserPromptSubmit`**: fires when you send Claude a message → `generating`.
 - **`PreToolUse`** (matcher `.*`, all tools): fires right before any tool
   call, including the moment right after you approve a permission
@@ -142,7 +146,7 @@ the hook's own stdin JSON and writes/updates that session's status file:
   so the app still prunes stale files as a fallback (see `StaleAfter` in
   `SessionManager.cs`, and the "waiting is never pruned" note above).
 
-Run `/hooks` inside Claude Code afterward to confirm all five events are
+Run `/hooks` inside Claude Code afterward to confirm all six events are
 registered — do this separately for each install, since `/hooks` only
 shows the config for the session you run it in.
 
@@ -198,12 +202,6 @@ whenever you log in.
   math (`ReflowPositions()`) and the `StaleAfter` constant (5 minutes)
   that controls how long an idle/generating session's orb sticks around
   before being pruned — `waiting` is exempt, see above.
-- **A session's orb doesn't appear until its first message.** There's no
-  `SessionStart` hook wired up, so nothing writes a status file (and no
-  orb appears) until the first hook that *is* wired fires — in practice,
-  `UserPromptSubmit`, meaning you have to actually send a message.
-  Add a `SessionStart` hook (`-State idle`) if you'd rather see the orb
-  the moment a session launches.
 - **Sound**: no audio right now, purely visual per your original ask. If
   you later want a soft sound on the waiting transition, that's a
   one-line `SystemSounds.Asterisk.Play()` (or point it at a custom .wav)

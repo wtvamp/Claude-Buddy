@@ -29,6 +29,16 @@
         ]
       }
     ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\<YOUR_USERNAME>\\AppData\\Local\\ClaudeBuddy\\ClaudeBuddyHook.ps1\" -State idle"
+          }
+        ]
+      }
+    ],
     "UserPromptSubmit": [
       {
         "hooks": [
