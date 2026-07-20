@@ -1,0 +1,74 @@
+{
+  "hooks": {
+    "Notification": [
+      {
+        "matcher": "permission_prompt",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\<YOUR_USERNAME>\\AppData\\Local\\ClaudeBuddy\\ClaudeBuddyHook.ps1\" -State waiting"
+          }
+        ]
+      },
+      {
+        "matcher": "elicitation_dialog",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\<YOUR_USERNAME>\\AppData\\Local\\ClaudeBuddy\\ClaudeBuddyHook.ps1\" -State waiting"
+          }
+        ]
+      },
+      {
+        "matcher": "elicitation_complete",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\<YOUR_USERNAME>\\AppData\\Local\\ClaudeBuddy\\ClaudeBuddyHook.ps1\" -State generating"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\<YOUR_USERNAME>\\AppData\\Local\\ClaudeBuddy\\ClaudeBuddyHook.ps1\" -State generating"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\<YOUR_USERNAME>\\AppData\\Local\\ClaudeBuddy\\ClaudeBuddyHook.ps1\" -State generating"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\<YOUR_USERNAME>\\AppData\\Local\\ClaudeBuddy\\ClaudeBuddyHook.ps1\" -State idle"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\<YOUR_USERNAME>\\AppData\\Local\\ClaudeBuddy\\ClaudeBuddyHook.ps1\" -State ended"
+          }
+        ]
+      }
+    ]
+  }
+}

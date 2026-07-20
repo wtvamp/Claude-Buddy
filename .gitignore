@@ -1,0 +1,7 @@
+bld/
+bin/
+Bin/
+obj/
+Obj/
+
+.claude/
