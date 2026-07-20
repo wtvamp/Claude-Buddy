@@ -1,0 +1,84 @@
+{
+  "hooks": {
+    "Notification": [
+      {
+        "matcher": "permission_prompt",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/claude-buddy/ClaudeBuddyHook.sh\" waiting"
+          }
+        ]
+      },
+      {
+        "matcher": "elicitation_dialog",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/claude-buddy/ClaudeBuddyHook.sh\" waiting"
+          }
+        ]
+      },
+      {
+        "matcher": "elicitation_complete",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/claude-buddy/ClaudeBuddyHook.sh\" generating"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/claude-buddy/ClaudeBuddyHook.sh\" idle"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/claude-buddy/ClaudeBuddyHook.sh\" generating"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/claude-buddy/ClaudeBuddyHook.sh\" generating"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/claude-buddy/ClaudeBuddyHook.sh\" idle"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/claude-buddy/ClaudeBuddyHook.sh\" ended"
+          }
+        ]
+      }
+    ]
+  }
+}

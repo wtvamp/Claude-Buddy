@@ -2,17 +2,24 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0-windows</TargetFramework>
-    <UseWPF>true</UseWPF>
+    <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>ClaudeBuddy</AssemblyName>
     <RootNamespace>ClaudeBuddy</RootNamespace>
-    <!-- Single-file, self-contained exe so you can just double-click it -->
+    <!-- Run on whatever newer runtime is installed (e.g. .NET 10 SDK only) -->
+    <RollForward>LatestMajor</RollForward>
+    <!-- Single-file, self-contained output when publishing; pick the RID on
+         the command line: dotnet publish -c Release -r win-x64|osx-arm64|osx-x64 -->
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
-    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="11.3.2" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.3.2" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.2" />
+  </ItemGroup>
 
 </Project>

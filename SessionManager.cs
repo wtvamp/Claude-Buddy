@@ -3,8 +3,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json.Serialization;
-using System.Windows;
-using System.Windows.Threading;
+using Avalonia;
+using Avalonia.Threading;
 
 namespace ClaudeBuddy
 {
@@ -67,9 +67,9 @@ namespace ClaudeBuddy
                     NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.CreationTime | NotifyFilters.FileName,
                     EnableRaisingEvents = true
                 };
-                _watcher.Changed += (_, _) => Application.Current.Dispatcher.Invoke(RestartDebounce);
-                _watcher.Created += (_, _) => Application.Current.Dispatcher.Invoke(RestartDebounce);
-                _watcher.Deleted += (_, _) => Application.Current.Dispatcher.Invoke(RestartDebounce);
+                _watcher.Changed += (_, _) => Dispatcher.UIThread.Post(RestartDebounce);
+                _watcher.Created += (_, _) => Dispatcher.UIThread.Post(RestartDebounce);
+                _watcher.Deleted += (_, _) => Dispatcher.UIThread.Post(RestartDebounce);
             }
             catch
             {
@@ -171,16 +171,26 @@ namespace ClaudeBuddy
 
         private void ReflowPositions()
         {
-            var workArea = SystemParameters.WorkArea;
-            const double size = 56;
-            const double spacing = 12;
-            const double margin = 24;
+            if (_order.Count == 0) return;
+
+            var first = _windows[_order[0]];
+            var screen = first.Screens.Primary ?? first.Screens.All.FirstOrDefault();
+            if (screen is null) return;
+
+            // WorkingArea and Window.Position are in physical pixels; the
+            // 56/12/24 design sizes are DIPs, so scale them.
+            var work = screen.WorkingArea;
+            var scale = screen.Scaling;
+            int size = (int)(56 * scale);
+            int spacing = (int)(12 * scale);
+            int margin = (int)(24 * scale);
 
             for (int i = 0; i < _order.Count; i++)
             {
                 var window = _windows[_order[i]];
-                window.Left = workArea.Right - size - margin;
-                window.Top = workArea.Top + margin + i * (size + spacing);
+                window.Position = new PixelPoint(
+                    work.Right - size - margin,
+                    work.Y + margin + i * (size + spacing));
             }
         }
 

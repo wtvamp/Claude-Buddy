@@ -1,14 +1,15 @@
-<Window x:Class="ClaudeBuddy.OrbWindow"
-        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+<Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="ClaudeBuddy.OrbWindow"
         Title="Claude Buddy"
         Width="56" Height="56"
-        WindowStyle="None"
-        AllowsTransparency="True"
+        SystemDecorations="None"
+        TransparencyLevelHint="Transparent"
         Background="Transparent"
         Topmost="True"
         ShowInTaskbar="False"
-        ResizeMode="NoResize"
+        CanResize="False"
+        ShowActivated="False"
         WindowStartupLocation="Manual">
 
     <Grid>
@@ -19,10 +20,10 @@
             </ContextMenu>
         </Grid.ContextMenu>
 
-        <!-- Soft glow behind the orb -->
+        <!-- Soft glow behind the orb (fill assigned in code-behind, shared
+             with the orb so color fades hit both) -->
         <Ellipse x:Name="Glow"
                  Width="56" Height="56"
-                 Fill="{Binding ElementName=Orb, Path=Fill}"
                  Opacity="0.35">
             <Ellipse.Effect>
                 <BlurEffect Radius="18"/>
@@ -33,18 +34,11 @@
         <Ellipse x:Name="Orb"
                  Width="36" Height="36"
                  Stroke="#22FFFFFF"
-                 StrokeThickness="1">
-            <Ellipse.Fill>
-                <SolidColorBrush x:Name="OrbBrush" Color="#5B7A94"/>
-            </Ellipse.Fill>
-            <Ellipse.RenderTransform>
-                <ScaleTransform x:Name="OrbScale" CenterX="18" CenterY="18" ScaleX="1" ScaleY="1"/>
-            </Ellipse.RenderTransform>
-        </Ellipse>
+                 StrokeThickness="1"/>
 
         <!-- Small glyph so it reads as "something", not just a dot -->
         <TextBlock x:Name="Glyph"
-                   Text="•"
+                   Text="&#8226;"
                    FontSize="20"
                    FontWeight="Bold"
                    Foreground="#DDFFFFFF"
