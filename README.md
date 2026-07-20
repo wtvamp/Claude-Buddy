@@ -12,8 +12,16 @@ one codebase). Each orb has three states:
   does *not* trigger this — that's deliberate, not a bug; see the matcher
   note below if you want it back.
 
-Hover an orb to see which session it is (its working directory). Right-click
-for a menu (reset that session to idle / exit Claude Buddy entirely).
+Each orb shows the first letter of its session's working directory so you
+can tell them apart at a glance; hover for the full path, and the
+right-click menu also leads with it (plus reset that session to idle /
+exit Claude Buddy entirely). On macOS, **left-click an orb to jump to that
+session's terminal** — the exact iTerm2 pane or Terminal.app tab when
+possible (works through tmux for iTerm2), otherwise just activating the
+terminal app (VS Code, Ghostty, WezTerm, ...). The first click asks for
+macOS Automation permission to control your terminal — approve it once.
+Click-to-focus needs the hook script from this version; sessions started
+under an older copy just won't respond to clicks until they're restarted.
 
 It works by watching a small folder in the OS temp directory
 (`%TEMP%\claude_buddy\` on Windows, `$TMPDIR/claude_buddy/` on macOS) that
@@ -219,6 +227,10 @@ It'll then start quietly whenever you log in.
   so `MacOSWindowExtensions.cs` sets it (`canJoinAllSpaces` +
   `fullScreenAuxiliary`) through the native window handle when each orb
   opens — that's the file to tweak if you'd rather orbs stay put.
+- **Click-to-focus coverage**: `TerminalFocuser.cs` maps `term_program` /
+  iTerm session UUID / tty (recorded by `ClaudeBuddyHook.sh`) to an
+  AppleScript that selects the right window. Add cases there for other
+  terminals; Windows sessions currently ignore clicks.
 - **Sound**: no audio right now, purely visual per your original ask. If
   you later want a soft sound on the waiting transition, that's one line
   in `OrbWindow.ApplyState()` — e.g. shell out to `afplay` on macOS or

@@ -15,6 +15,17 @@ namespace ClaudeBuddy
 
         [JsonPropertyName("cwd")]
         public string Cwd { get; set; } = "";
+
+        // Where the session's terminal lives (macOS hook only; empty on
+        // Windows or with an older hook script). See TerminalFocuser.
+        [JsonPropertyName("term_program")]
+        public string TermProgram { get; set; } = "";
+
+        [JsonPropertyName("term_id")]
+        public string TermId { get; set; } = "";
+
+        [JsonPropertyName("tty")]
+        public string Tty { get; set; } = "";
     }
 
     // Watches %TEMP%\claude_buddy\<session_id>.txt (one per running Claude
@@ -197,15 +208,16 @@ namespace ClaudeBuddy
         public void ResetSessionToIdle(string sessionId)
         {
             var file = Path.Combine(_statusDir, sessionId + ".txt");
-            var cwd = "";
+            SessionStatus? existing = null;
             try
             {
-                var existing = System.Text.Json.JsonSerializer.Deserialize<SessionStatus>(File.ReadAllText(file));
-                if (existing is not null) cwd = existing.Cwd;
+                existing = System.Text.Json.JsonSerializer.Deserialize<SessionStatus>(File.ReadAllText(file));
             }
             catch { }
 
-            var reset = new SessionStatus { State = "idle", Cwd = cwd };
+            // Keep everything but the state (cwd, terminal info) intact.
+            var reset = existing ?? new SessionStatus();
+            reset.State = "idle";
             try
             {
                 File.WriteAllText(file, System.Text.Json.JsonSerializer.Serialize(reset));

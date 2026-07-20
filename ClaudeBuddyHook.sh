@@ -17,6 +17,27 @@ SESSION_ID=$(printf '%s' "$PAYLOAD" | sed -n 's/.*"session_id"[[:space:]]*:[[:sp
 CWD=$(printf '%s' "$PAYLOAD" | sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
 [ -n "$SESSION_ID" ] || SESSION_ID="unknown"
 
+# Identify the terminal hosting this session so a click on the orb can jump
+# to it. This script runs inside the terminal's process tree, so:
+# - ITERM_SESSION_ID ("w0t0p0:UUID") pins the exact iTerm2 pane, and is
+#   preferred over TERM_PROGRAM since tmux masks the latter;
+# - the controlling tty of the nearest ancestor that has one (the claude
+#   TUI process — this hook itself runs on a pipe, not a tty) pins the
+#   exact Terminal.app tab.
+TERM_ID=""
+if [ -n "$ITERM_SESSION_ID" ]; then
+    TERM_ID="${ITERM_SESSION_ID#*:}"
+fi
+
+TTY=""
+PID=$$
+for _ in 1 2 3 4 5; do
+    PID=$(ps -o ppid= -p "$PID" 2>/dev/null | tr -d ' ')
+    { [ -z "$PID" ] || [ "$PID" = "0" ] || [ "$PID" = "1" ]; } && break
+    T=$(ps -o tty= -p "$PID" 2>/dev/null | tr -d ' ')
+    if [ -n "$T" ] && [ "$T" != "??" ]; then TTY="$T"; break; fi
+done
+
 # ${TMPDIR} is what .NET's Path.GetTempPath() returns on macOS, so the app
 # and this script agree on the folder (both are per-user).
 DIR="${TMPDIR:-/tmp/}"
@@ -27,7 +48,8 @@ if [ "$STATE" = "ended" ]; then
     rm -f "$FILE"
 else
     mkdir -p "$DIR"
-    printf '{"state":"%s","cwd":"%s"}' "$STATE" "$CWD" > "$FILE"
+    printf '{"state":"%s","cwd":"%s","term_program":"%s","term_id":"%s","tty":"%s"}' \
+        "$STATE" "$CWD" "$TERM_PROGRAM" "$TERM_ID" "$TTY" > "$FILE"
 fi
 
 exit 0

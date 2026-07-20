@@ -51,6 +51,8 @@ namespace ClaudeBuddy
 
         public void UpdateFrom(SessionStatus status)
         {
+            _lastStatus = status;
+
             var folder = string.IsNullOrEmpty(status.Cwd)
                 ? ""
                 : System.IO.Path.GetFileName(status.Cwd.TrimEnd('\\', '/'));
@@ -147,18 +149,60 @@ namespace ClaudeBuddy
             _pulseCts = null;
         }
 
-        // --- Dragging & context menu ---
+        // --- Click, dragging & context menu ---
+        // Left-press starts as a potential click; it becomes a drag once the
+        // pointer moves past a small threshold. A clean click jumps to the
+        // session's terminal (macOS, best-effort — see TerminalFocuser).
         // Dragged position is only honored until the next time the active
         // session set changes (add/remove), at which point SessionManager
         // reflows the whole stack. That's an intentional tradeoff to keep
         // the stack tidy as sessions come and go.
+
+        private SessionStatus? _lastStatus;
+        private bool _pressed;
+        private bool _dragging;
+        private PixelPoint _windowStart;
+        private PixelPoint _pointerStart;
 
         protected override void OnPointerPressed(PointerPressedEventArgs e)
         {
             base.OnPointerPressed(e);
             if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
             {
-                BeginMoveDrag(e);
+                _pressed = true;
+                _dragging = false;
+                _windowStart = Position;
+                _pointerStart = this.PointToScreen(e.GetPosition(this));
+                e.Pointer.Capture(this);
+            }
+        }
+
+        protected override void OnPointerMoved(PointerEventArgs e)
+        {
+            base.OnPointerMoved(e);
+            if (!_pressed) return;
+
+            var current = this.PointToScreen(e.GetPosition(this));
+            var dx = current.X - _pointerStart.X;
+            var dy = current.Y - _pointerStart.Y;
+
+            if (!_dragging && Math.Abs(dx) < 6 && Math.Abs(dy) < 6) return;
+
+            _dragging = true;
+            Position = new PixelPoint(_windowStart.X + dx, _windowStart.Y + dy);
+        }
+
+        protected override void OnPointerReleased(PointerReleasedEventArgs e)
+        {
+            base.OnPointerReleased(e);
+            if (!_pressed) return;
+
+            _pressed = false;
+            e.Pointer.Capture(null);
+
+            if (!_dragging)
+            {
+                TerminalFocuser.Focus(_lastStatus);
             }
         }
 
