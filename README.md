@@ -214,10 +214,11 @@ It'll then start quietly whenever you log in.
   math (`ReflowPositions()`) and the `StaleAfter` constant (5 minutes)
   that controls how long an idle/generating session's orb sticks around
   before being pruned — `waiting` is exempt, see above.
-- **macOS + Spaces**: orbs float above normal windows, but following you
-  across Spaces / full-screen apps (`canJoinAllSpaces`) isn't wired up —
-  Avalonia doesn't expose that NSWindow flag. Orbs live on the desktop/Space
-  they were created on.
+- **macOS + Spaces**: orbs follow you across Spaces and show alongside
+  full-screen apps. Avalonia doesn't expose `NSWindow.collectionBehavior`,
+  so `MacOSWindowExtensions.cs` sets it (`canJoinAllSpaces` +
+  `fullScreenAuxiliary`) through the native window handle when each orb
+  opens — that's the file to tweak if you'd rather orbs stay put.
 - **Sound**: no audio right now, purely visual per your original ask. If
   you later want a soft sound on the waiting transition, that's one line
   in `OrbWindow.ApplyState()` — e.g. shell out to `afplay` on macOS or

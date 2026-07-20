@@ -45,6 +45,8 @@ namespace ClaudeBuddy
             // Unlike WPF, Loaded fires *after* the first UpdateFrom here, so
             // honor any state that already arrived instead of stomping it.
             Loaded += (_, _) => ApplyState(string.IsNullOrEmpty(_lastState) ? "idle" : _lastState);
+
+            Opened += (_, _) => this.ShowOnAllSpaces();
         }
 
         public void UpdateFrom(SessionStatus status)
