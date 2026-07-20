@@ -12,9 +12,14 @@
         ShowActivated="False"
         WindowStartupLocation="Manual">
 
-    <Grid>
+    <!-- Transparent (not null) background so the whole 56x56 area is
+         hit-testable: hover tooltip, drag, and right-click work anywhere
+         on the orb's square, not just the ellipse pixels. -->
+    <Grid x:Name="Root" Background="Transparent">
         <Grid.ContextMenu>
             <ContextMenu>
+                <MenuItem x:Name="SessionInfoItem" IsEnabled="False"/>
+                <Separator/>
                 <MenuItem Header="Reset this session to idle" Click="ResetIdle_Click"/>
                 <MenuItem Header="Exit Claude Buddy" Click="Exit_Click"/>
             </ContextMenu>
@@ -36,15 +41,15 @@
                  Stroke="#22FFFFFF"
                  StrokeThickness="1"/>
 
-        <!-- Small glyph so it reads as "something", not just a dot -->
+        <!-- Folder initial so you can tell orbs apart at a glance
+             (falls back to a dot until the session reports its cwd) -->
         <TextBlock x:Name="Glyph"
                    Text="&#8226;"
-                   FontSize="20"
+                   FontSize="16"
                    FontWeight="Bold"
                    Foreground="#DDFFFFFF"
                    HorizontalAlignment="Center"
                    VerticalAlignment="Center"
-                   Margin="0,-4,0,0"
                    IsHitTestVisible="False"/>
     </Grid>
 </Window>

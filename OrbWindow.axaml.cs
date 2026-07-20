@@ -51,9 +51,19 @@ namespace ClaudeBuddy
 
         public void UpdateFrom(SessionStatus status)
         {
-            ToolTip.SetTip(this, string.IsNullOrEmpty(status.Cwd)
+            var folder = string.IsNullOrEmpty(status.Cwd)
+                ? ""
+                : System.IO.Path.GetFileName(status.Cwd.TrimEnd('\\', '/'));
+
+            ToolTip.SetTip(Root, string.IsNullOrEmpty(status.Cwd)
                 ? SessionId
-                : $"{System.IO.Path.GetFileName(status.Cwd.TrimEnd('\\', '/'))}\n{status.Cwd}");
+                : $"{folder}\n{status.Cwd}");
+
+            Glyph.Text = string.IsNullOrEmpty(folder)
+                ? "•"
+                : folder[..1].ToUpperInvariant();
+
+            SessionInfoItem.Header = string.IsNullOrEmpty(status.Cwd) ? SessionId : status.Cwd;
 
             if (status.State != _lastState)
             {
