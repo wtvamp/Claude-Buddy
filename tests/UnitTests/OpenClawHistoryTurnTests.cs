@@ -453,11 +453,14 @@ public class OpenClawHistoryTurnTests
         Assert.Equal("~/.openclaw/media/a.png", source);
     }
 
-    // The envelope carrying the path is still not the picture's turn. It stays
-    // text, on its own bubble, and only the mirror record draws — otherwise
-    // one delivered picture would appear twice.
+    // CB-107: the envelope now names the same picture the mirror record
+    // delivers, and the two collapse into one bubble via the existing CB-98
+    // cross-arm rule (one named turn cancels one mirror) rather than each
+    // drawing it separately — which is what actually avoids one delivered
+    // picture appearing twice, without going back to never drawing the
+    // envelope's own picture at all.
     [Fact]
-    public void TheEnvelopeThatCarriesThePathIsNotItselfAPicture()
+    public void TheEnvelopeAndItsMirrorCollapseIntoOnePicture()
     {
         var turns = Turns("""
         [{"role":"user","content":"[Inter-session message] sourceSession=agent:comfyui:main\nrouted by OpenClaw\n/Users/w/.openclaw/media/pic.png"},
@@ -466,7 +469,7 @@ public class OpenClawHistoryTurnTests
         """);
 
         Assert.Single(turns, t => t.ImageUrl is not null);
-        Assert.Equal(2, turns.Count);
+        Assert.Single(turns);
     }
 
     // And it keeps its filename as text, so a fetch that cannot succeed — a

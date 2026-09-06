@@ -241,7 +241,11 @@ namespace ClaudeBuddy
             var localPath = OpenClawSessions.LocalMediaPathFrom(text);
             if (localPath is not null)
             {
-                TryResolveLocalMedia(_streaming, localPath);
+                // No page to harvest a real directory from while streaming
+                // (see ResolveLocalMediaPath's own comment) — a bare filename
+                // gets the shared-media-directory guess, the same one the
+                // history read falls back to when its own harvest misses.
+                TryResolveLocalMedia(_streaming, OpenClawSessions.ResolveLocalMediaPath(localPath, null));
             }
         }
 

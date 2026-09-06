@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Xunit;
 
 namespace ClaudeBuddy.UnitTests;
@@ -122,5 +123,99 @@ public class OpenClawLocalMediaPathTests
     public void ABarePathToAnUnknownExtensionIsNotAPicture()
     {
         Assert.Null(OpenClawSessions.LocalMediaPathFrom("/tmp/notes.txt"));
+    }
+
+    // CB-107: an agent's caption paired descriptive text with the file rather
+    // than sending it alone, breaking both existing arms. Caught live in a
+    // real OpenClaw orb — none of the reported messages drew a thumbnail.
+    [Fact]
+    public void ACaptionWithABarePathOnTheNextLineIsFound()
+    {
+        Assert.Equal(
+            "/Users/w/.openclaw/workspace-example/outputs/agent/photo_275866713.png",
+            OpenClawSessions.LocalMediaPathFrom(
+                "here's the shot   /Users/w/.openclaw/"
+                + "workspace-example/outputs/agent/photo_275866713.png"));
+    }
+
+    // A bare filename with no directory at all has nothing to fetch on its
+    // own — ResolveLocalMediaPath is what turns this into something
+    // fetchable, so this returns the raw name unresolved.
+    [Fact]
+    public void ACaptionWithABareFilenameOnTheNextLineIsFoundUnresolved()
+    {
+        Assert.Equal(
+            "photo_773311913.png",
+            OpenClawSessions.LocalMediaPathFrom(
+                "here's this morning's shot\n"
+                + "photo_773311913.png"));
+    }
+
+    // Video is a real shape in the same corpus, but a deliberately separate
+    // gap: ImageExtensions has no video extensions, so this stays plain text
+    // rather than being silently treated as an image.
+    [Fact]
+    public void ACaptionWithATrailingVideoFilenameIsNotAPicture()
+    {
+        Assert.Null(OpenClawSessions.LocalMediaPathFrom(
+            "Fixed the clip, here you go.\n"
+            + "clip_v4_final.mp4"));
+    }
+
+    // A bare trailing word still has to look like a filename — the relative-
+    // path and unknown-extension rules from the whole-message checks above
+    // apply here too, not just "ends the message".
+    [Fact]
+    public void ATrailingWordThatIsNotFilenameShapedIsNotAPicture()
+    {
+        Assert.Null(OpenClawSessions.LocalMediaPathFrom(
+            "just an ordinary reply that ends in a word"));
+    }
+}
+
+// CB-107: turning what LocalMediaPathFrom found into something fetchable.
+public class OpenClawResolveLocalMediaPathTests
+{
+    [Fact]
+    public void ARootedPathIsReturnedUnchanged()
+    {
+        Assert.Equal("/tmp/pic.png",
+            OpenClawSessions.ResolveLocalMediaPath("/tmp/pic.png", null));
+    }
+
+    [Fact]
+    public void ATildePathIsReturnedUnchanged()
+    {
+        Assert.Equal("~/.openclaw/media/pic.png",
+            OpenClawSessions.ResolveLocalMediaPath("~/.openclaw/media/pic.png", null));
+    }
+
+    [Fact]
+    public void ABareFilenameKnownOnThePageResolvesToItsHarvestedDirectory()
+    {
+        var mediaPaths = new Dictionary<string, string>
+        {
+            ["pic.png"] = "/Users/w/.openclaw/workspace-example/outputs/agent/pic.png"
+        };
+
+        Assert.Equal(
+            "/Users/w/.openclaw/workspace-example/outputs/agent/pic.png",
+            OpenClawSessions.ResolveLocalMediaPath("pic.png", mediaPaths));
+    }
+
+    [Fact]
+    public void ABareFilenameUnknownOnThePageFallsBackToTheSharedMediaDirectory()
+    {
+        Assert.Equal(
+            OpenClawSessions.SharedMediaDir + "pic.png",
+            OpenClawSessions.ResolveLocalMediaPath("pic.png", new Dictionary<string, string>()));
+    }
+
+    [Fact]
+    public void ABareFilenameWithNoPageAtAllFallsBackToTheSharedMediaDirectory()
+    {
+        Assert.Equal(
+            OpenClawSessions.SharedMediaDir + "pic.png",
+            OpenClawSessions.ResolveLocalMediaPath("pic.png", null));
     }
 }

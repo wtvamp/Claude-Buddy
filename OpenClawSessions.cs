@@ -1844,9 +1844,13 @@ namespace ClaudeBuddy
                 // but they can each fire on a different message of the same
                 // page and land on the same file. That is what namedSources
                 // below is for.
-                var named = LocalMediaPathFrom(text);
-                if (named is not null)
+                var namedCandidate = LocalMediaPathFrom(text);
+                if (namedCandidate is not null)
                 {
+                    // A bare filename resolves against this page's own
+                    // harvested paths (CB-94) before falling back to a guess
+                    // — see ResolveLocalMediaPath's own comment.
+                    var named = ResolveLocalMediaPath(namedCandidate, mediaPaths);
                     namedSources[named] = namedSources.GetValueOrDefault(named) + 1;
 
                     // Text kept and the picture beside it, which is the shape
@@ -2014,6 +2018,9 @@ namespace ClaudeBuddy
         private static readonly string[] ImageExtensions =
             { ".png", ".jpg", ".jpeg", ".gif", ".webp" };
 
+        // Returns a rooted path (starting with "/" or "~/") or, since CB-107,
+        // a bare filename with no directory at all — the caller decides how
+        // to turn either into something fetchable (ResolveLocalMediaPath).
         internal static string? LocalMediaPathFrom(string text)
         {
             // A line of its own, not necessarily the first line: the real
@@ -2036,7 +2043,70 @@ namespace ClaudeBuddy
             }
 
             var trimmed = text.Trim();
-            return LooksLikeAnImagePath(trimmed) ? trimmed : null;
+            if (LooksLikeAnImagePath(trimmed)) return trimmed;
+
+            // CB-107: an agent's caption can pair descriptive prose with the
+            // file rather than sending it alone — a caption line followed by
+            // a bare filename on the next line, or a caption and a path
+            // trailing on the same line. The two checks above only ever
+            // matched a message that was *nothing but* the path, so neither
+            // fired and the picture rendered as plain text.
+            //
+            // Scanning the trailing whitespace-separated token catches both
+            // shapes (a bare filename on its own final line is also the last
+            // token of the whole message) without loosening the checks
+            // above: an ordinary sentence would have to happen to *end* with
+            // something extension-shaped, which is a much narrower accident
+            // than "mentions a .png anywhere".
+            var tokens = text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (tokens.Length == 0) return null;
+
+            var last = tokens[^1];
+            if (LooksLikeAnImagePath(last)) return last;
+
+            // A bare filename alone, with nothing else in the message, already
+            // failed the whole-message check above and stays plain text — an
+            // agent naming a file with no caption around it is exactly the
+            // ambiguous case DeliveredPictureName exists for, trusted only
+            // once the gateway's own delivery-mirror record confirms it, not
+            // from prose alone (AnOrdinaryTurnNamingAFileStaysText). Paired
+            // with a caption, it's the CB-107 shape and is returned
+            // unresolved; ResolveLocalMediaPath is what turns this into
+            // something fetchable, the same way the delivery-mirror branch
+            // already does for its own bare filenames.
+            return tokens.Length > 1 && LooksLikeABareImageFilename(last) ? last : null;
+        }
+
+        // No directory separator at all, as opposed to LooksLikeAnImagePath's
+        // rooted paths. Deliberately narrower than "no slash": a filename
+        // with a space in it would already have failed the whitespace-token
+        // split above, so the checks here are about the extension and
+        // nothing else being present.
+        private static bool LooksLikeABareImageFilename(string text) =>
+            text.Length > 0
+            && !text.Contains('/')
+            && !text.Contains('\\')
+            && Array.Exists(ImageExtensions, ext => text.EndsWith(ext, StringComparison.OrdinalIgnoreCase));
+
+        // Turns whatever LocalMediaPathFrom found into something actually
+        // fetchable. A rooted path is already that; a bare filename is the
+        // same guess DeliveredPictureName's own branch makes — a known
+        // directory from this page's mediaPaths where CB-94's JSON harvest
+        // found one, the shared media directory otherwise. Callers with no
+        // page to harvest from (the live stream — see OpenClawChatSession)
+        // pass null and get the guess alone, which is right for the same
+        // reason it is right there: a wrong guess costs nothing but an
+        // "unavailable" fetch, and the filename stays as the turn's text.
+        internal static string ResolveLocalMediaPath(
+            string candidate, IReadOnlyDictionary<string, string>? mediaPaths)
+        {
+            if (candidate.StartsWith('/') || candidate.StartsWith("~/", StringComparison.Ordinal))
+                return candidate;
+
+            if (mediaPaths is not null && mediaPaths.TryGetValue(candidate, out var known))
+                return known;
+
+            return SharedMediaDir + candidate;
         }
 
         // `~/` as well as `/` (CB-97). The gateway expands a leading tilde

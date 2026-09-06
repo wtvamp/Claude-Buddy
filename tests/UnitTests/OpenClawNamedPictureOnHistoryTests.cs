@@ -83,20 +83,30 @@ public class OpenClawNamedPictureOnHistoryTests
         Assert.Equal("~/.openclaw/media/browser/03a1be83.png", SourceOf(turn));
     }
 
-    // An inter-session envelope whose path is a bare last line stays text. The
-    // bare-path arm needs the *whole* trimmed message to be the path, and this
-    // has two lines of machine preamble above it — so the picture is not drawn
-    // on the handoff turn, which would put it on the wrong bubble and then
-    // again on the real one.
+    // CB-107 revisits this. It used to stay text: the bare-path arm required
+    // the *whole* trimmed message to be the path, and an inter-session
+    // envelope's machine preamble above it meant it never was — deliberately,
+    // to avoid the picture appearing on both the forwarding turn and its
+    // origin.
+    //
+    // LocalMediaPathFrom now also matches a trailing path after a caption
+    // (a real observed captioning shape — see OpenClawLocalMediaPathTests),
+    // and there is no text-only way to tell that apart from "routing preamble
+    // ending in a path": both are a line of prose followed by nothing but a
+    // path. Left drawing rather than blocked, the same call already made for
+    // AnEnvelopeCarryingAMediaLineDoesDraw below — a relayed message carrying
+    // a picture should show it, and a possible second render on the
+    // originating session's own orb costs less than an OpenClaw agent's
+    // pictures silently going text-only, which is the bug CB-107 exists for.
     [Fact]
-    public void AnEnvelopeWhoseLastLineIsABarePathStaysText()
+    public void AnEnvelopeWhoseLastLineIsABarePathNowDrawsToo()
     {
         var turn = Assert.Single(Turns("""
         [{"role":"assistant","content":[{"type":"text","text":
           "[Inter-session message] sourceSession=agent:comfyui:main\nrouted by OpenClaw\n/Users/w/.openclaw/media/pic.png"}]}]
         """));
 
-        Assert.Null(turn.ImageUrl);
+        Assert.Equal("/Users/w/.openclaw/media/pic.png", SourceOf(turn));
     }
 
     // But an envelope carrying a MEDIA: line DOES draw, and this test exists
