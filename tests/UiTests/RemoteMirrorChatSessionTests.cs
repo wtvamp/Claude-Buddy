@@ -578,8 +578,23 @@ public class RemoteMirrorChatSessionTests : IDisposable
     // The mirrored transcript settling the pending turn once the far session's
     // own next turn writes the row — the same mechanism a typed send already
     // relies on, exercised here for the messaging path.
+    //
+    // **This has to use the real wrapped row, not the bare text, or it proves
+    // nothing.** A message delivered over CB-105's socket lands in the far
+    // session's own transcript exactly the way one delivered over the old
+    // relay fallback did — as a "user" row whose content is the whole
+    // `<cross-session-message …>` tag SessionMessageFrame.Wrap builds, not
+    // the plain text — so Echoes has to go through
+    // BridgeProtocol.ParseInboundMessages to find it, not match on equality.
+    // The first version of this test appended a bare UserRow("still there?")
+    // and passed on the trivial exact-match branch of Echoes without ever
+    // reaching the tag-parsing arm — precisely the mistake commit 904aa87
+    // fixed for the relay-fallback case this one mirrors, and precisely why
+    // both UserRowEncoded (properly JSON-escaped; the tag contains quotes)
+    // and the assertion that the settled text still carries the tag are
+    // here rather than a plain string match.
     [AvaloniaFact]
-    public async Task ADeliveredMessageIsSettledByTheEchoJustLikeATypedOne()
+    public async Task ADeliveredMessageIsSettledByTheEchoOfItsOwnWrappedRow()
     {
         _canType = false;
         _canDeliver = true;
@@ -592,12 +607,23 @@ public class RemoteMirrorChatSessionTests : IDisposable
 
         await session.SendAsync("still there?");
 
-        Append(UserRow("u2", "still there?"));
+        Append(UserRowEncoded("echo", SessionMessageFrame.Wrap(
+            SessionMessenger.FromName("the-other-machine"), "still there?")));
+
         await _server.TickAsync();
 
         Assert.Equal(1, updated);
-        // Adopted the turn already on screen rather than adding a second one.
-        Assert.Single(Turns(session), t => t.Text == "still there?");
+
+        // Once, not twice: the wrapped echo adopted the bubble already on
+        // screen rather than the typed turn being left pending forever, or a
+        // second bubble appearing beside it.
+        var settled = Assert.Single(Turns(session), t => t.Role == ChatRole.User && t.Text.Contains("still there?"));
+
+        // And it genuinely arrived rather than being skipped — the settled
+        // bubble carries the transcript's own wording, the wrapped tag and
+        // all, which cannot be true unless the row was actually parsed
+        // rather than matched by coincidence.
+        Assert.Contains("cross-session-message", settled.Text);
     }
 
     [AvaloniaFact]
