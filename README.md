@@ -897,6 +897,20 @@ be a lie about work you are watching happen.
 Nothing here hides an orb. A parked job is real, resumable and worth clicking,
 and how long a quiet session stays on screen is what **"Keep orbs for"** is for.
 
+**Messaging one.** A background job or an `--agent` child never has a terminal
+to type into or attach to at all, on any machine — the ⚙ badge above is what it
+is, not a temporary state. Its chat panel offers a send anyway: the message is
+handed to Claude Code's own IPC socket for that session rather than typed
+into a pane that doesn't exist, and it reads at the session's next turn, not
+immediately — the composer says so ("Message it — it reads this at its next
+turn") rather than implying a pane it doesn't have. It arrives as a message
+from Claude Buddy, not as keystrokes, so **built-in slash commands don't run**
+this way, though a project's own custom skill commands do, since those are
+just instructions the model reads. This works both for a background job on
+this machine and, over the mirror link, for one on a peer machine — the same
+mechanism either way, just addressed through the far Buddy instead of straight
+to the socket. See `docs/headless-delivery-findings.md` for what was measured.
+
 ## Chatting with a session from its orb
 
 Hover an orb and the flyout has a keyboard button (⌨). It opens a small panel
