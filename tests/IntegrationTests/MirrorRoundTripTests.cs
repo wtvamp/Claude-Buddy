@@ -630,12 +630,125 @@ public class MirrorRoundTripTests : IDisposable
     {
         var path = WriteTranscript("nopane.jsonl", Conversation(2));
 
+        // The regression that matters most: Seams.CanDeliver and Seams.Deliver
+        // are left literally null here (Harness's default — wireDelivery is
+        // not passed), which is the exact shape an older harness or test has.
+        // CB-105's messaging fallback must not change this at all.
         var harness = new Harness(_dir) { CanType = false };
         harness.AddSession("job-hunter", path);
         await harness.HandshakeAsync("job-hunter");
 
         Assert.Equal(MirrorProtocol.ErrNoPane, await harness.Client.SendInputAsync("job-hunter", "hello"));
         Assert.Empty(harness.Typed);
+    }
+
+    // --- CB-105: delivering to a session with no pane at all --------------------
+
+    [Fact]
+    public async Task TypingWithNoPaneFallsBackToDeliveringOverMessaging()
+    {
+        var path = WriteTranscript("headless.jsonl", Conversation(2));
+
+        var harness = new Harness(_dir, wireDelivery: true)
+        {
+            CanType = false,
+            CanDeliverAnswer = true,
+            DeliverAgentStatus = "working"
+        };
+        harness.AddSession("job-hunter", path);
+        await harness.HandshakeAsync("job-hunter");
+
+        var outcome = await harness.Client.SendInputDetailedAsync("job-hunter", "hello");
+
+        Assert.Null(outcome.Error);
+        Assert.Equal(MirrorProtocol.ViaMessage, outcome.Via);
+        Assert.Equal("working", outcome.AgentStatus);
+        Assert.Equal("hello", Assert.Single(harness.Delivered).Text);
+        Assert.Empty(harness.Typed);
+    }
+
+    [Fact]
+    public async Task DeliveryToASessionTheRegistryNoLongerKnowsIsRefused()
+    {
+        var path = WriteTranscript("gone.jsonl", Conversation(2));
+
+        var harness = new Harness(_dir, wireDelivery: true)
+        {
+            CanType = false,
+            CanDeliverAnswer = true,
+            DeliverResult = DeliveryResult.NoRegistryEntry
+        };
+        harness.AddSession("job-hunter", path);
+        await harness.HandshakeAsync("job-hunter");
+
+        var outcome = await harness.Client.SendInputDetailedAsync("job-hunter", "hello");
+
+        Assert.Equal(MirrorProtocol.ErrNotRegistered, outcome.Error);
+    }
+
+    // DeliveryResult is internal, so it cannot ride a [Theory]'s InlineData on
+    // a public test method — one Fact per arm, matching how
+    // SessionMessengerTests already covers the same enum.
+    [Fact]
+    public async Task ASocketRefusalIsReportedAsErrDeliverFailed() =>
+        await AssertDeliverFailed(DeliveryResult.SocketRefused);
+
+    [Fact]
+    public async Task AWriteFailureIsReportedAsErrDeliverFailed() =>
+        await AssertDeliverFailed(DeliveryResult.WriteFailed);
+
+    [Fact]
+    public async Task AnUnsupportedProtocolIsReportedAsErrDeliverFailed() =>
+        await AssertDeliverFailed(DeliveryResult.UnsupportedProtocol);
+
+    private async Task AssertDeliverFailed(DeliveryResult result)
+    {
+        var path = WriteTranscript($"refused-{result}.jsonl", Conversation(2));
+
+        var harness = new Harness(_dir, wireDelivery: true)
+        {
+            CanType = false,
+            CanDeliverAnswer = true,
+            DeliverResult = result
+        };
+        harness.AddSession("job-hunter", path);
+        await harness.HandshakeAsync("job-hunter");
+
+        var outcome = await harness.Client.SendInputDetailedAsync("job-hunter", "hello");
+
+        Assert.Equal(MirrorProtocol.ErrDeliverFailed, outcome.Error);
+    }
+
+    [Fact]
+    public async Task ADeliverySeamThatThrowsIsCaughtRatherThanKillingTheConnection()
+    {
+        var path = WriteTranscript("throws.jsonl", Conversation(2));
+
+        var harness = new Harness(_dir, wireDelivery: true)
+        {
+            CanType = false,
+            CanDeliverAnswer = true,
+            DeliverThrows = true
+        };
+        harness.AddSession("job-hunter", path);
+        await harness.HandshakeAsync("job-hunter");
+
+        var outcome = await harness.Client.SendInputDetailedAsync("job-hunter", "hello");
+
+        Assert.Equal(MirrorProtocol.ErrDeliverFailed, outcome.Error);
+    }
+
+    [Fact]
+    public async Task ARosterOffersDeliveryWhenTheSeamSaysSo()
+    {
+        var path = WriteTranscript("offers-deliver.jsonl", Conversation(2));
+
+        var harness = new Harness(_dir, wireDelivery: true) { CanType = false, CanDeliverAnswer = true };
+        harness.AddSession("job-hunter", path);
+
+        await harness.HandshakeAsync("job-hunter");
+
+        Assert.True(harness.Client.StateFor("job-hunter").Entry!.CanDeliver);
     }
 
     [Fact]
@@ -1364,6 +1477,17 @@ public class MirrorRoundTripTests : IDisposable
         public bool ReplyEnabled { get; init; } = true;
         public bool CanType { get; init; } = true;
 
+        // CB-105's messaging fallback. Only wired at all when the constructor
+        // is told to (see wireDelivery below) — every test written before
+        // this feature keeps constructing a Harness with Seams.CanDeliver and
+        // Seams.Deliver literally null, which is the exact back-compat shape
+        // TypingIsRefusedWhenThereIsNoPaneToTypeInto pins.
+        public bool CanDeliverAnswer { get; set; }
+        public DeliveryResult DeliverResult { get; set; } = DeliveryResult.Accepted;
+        public string? DeliverAgentStatus { get; set; }
+        public bool DeliverThrows { get; set; }
+        public List<(string Name, string Text)> Delivered { get; } = new();
+
         // A courier that rewrites every payload it carries.
         public bool MangleChunks { get; set; }
 
@@ -1397,7 +1521,7 @@ public class MirrorRoundTripTests : IDisposable
         // other accounts down with it. See ServeOneAsync.
         public bool AgentsThrow { get; set; }
 
-        public Harness(string dir)
+        public Harness(string dir, bool wireDelivery = false)
         {
             _dir = dir;
 
@@ -1414,6 +1538,18 @@ public class MirrorRoundTripTests : IDisposable
                     Typed.Add((NameOf(status), text));
                     return Task.FromResult(true);
                 },
+                // Left null unless a test asks for CB-105's messaging path —
+                // see wireDelivery's own comment on CanDeliverAnswer above.
+                CanDeliver: wireDelivery ? status => CanDeliverAnswer : null,
+                Deliver: wireDelivery
+                    ? (status, text) =>
+                    {
+                        if (DeliverThrows) throw new InvalidOperationException("messaging socket went away");
+
+                        Delivered.Add((NameOf(status), text));
+                        return Task.FromResult(new DeliveryReceipt(DeliverResult, DeliverAgentStatus));
+                    }
+                    : null,
                 // Who may ask, which the server no longer guesses. It used to fall
                 // back to a name test — anything called `claude-buddy-rc-…` was
                 // taken for another Buddy's relay — and a name is not a credential.

@@ -87,6 +87,27 @@ namespace ClaudeBuddy
         public const string ErrBadHash = "bad-hash";
         public const string ErrUnsupported = "unsupported";
 
+        // The far session's own registry entry is gone — CB-105's messaging
+        // path found no ~/.claude/sessions file for it at all, which almost
+        // always means the background job it named has since stopped. There
+        // is neither a pane nor a socket to reach it through, unlike
+        // ErrNoPane below, where a pane genuinely does not exist but the
+        // session itself is still there.
+        public const string ErrNotRegistered = "not-registered";
+
+        // A registry entry existed and looked reachable, but handing it the
+        // text failed — the socket refused the connection, or the write
+        // itself did. The same split as ErrNoPane/ErrTypeFailed, one layer
+        // over: a route was found here too, and it declined it.
+        public const string ErrDeliverFailed = "deliver-failed";
+
+        // The value the INPUT reply's `via` field carries when a message was
+        // handed to the far session's own messaging socket rather than typed
+        // into a terminal. There is no equivalent constant for the typed
+        // case — that was always the assumed shape of a successful send, so
+        // this exists only to let the client tell the two apart.
+        public const string ViaMessage = "msg";
+
         // How much raw payload goes in one frame.
         //
         // **6KB, because a model had to retype it. Now the size of a message.**
@@ -468,7 +489,20 @@ namespace ClaudeBuddy
             // Optional, and absent reads as idle: an older Buddy on the far end
             // answers without it, and gets an orb that is right about everything
             // except its pulse rather than no orb at all.
-            [property: JsonPropertyName("status")] string? Status = null);
+            [property: JsonPropertyName("status")] string? Status = null,
+
+            // Whether the far machine can hand this session text over its own
+            // messaging socket when there is no pane to type into — CB-105's
+            // second delivery path, for a background or agent-mode job that
+            // never has a terminal at all.
+            //
+            // **Trailing and optional for the same reason Status is.** An
+            // older Buddy's JSON never mentions delivery, and that has to
+            // read as "unknown" rather than fail to parse or read as false —
+            // the two are different claims, and a session offered as
+            // undeliverable when the far machine simply never answered would
+            // be a live-view session that quietly cannot be reached.
+            [property: JsonPropertyName("deliver")] bool? CanDeliver = null);
 
         public const string CliClaudeCode = "claude";
         public const string CliCodex = "codex";

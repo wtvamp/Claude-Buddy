@@ -536,6 +536,52 @@ public class MirrorProtocolTests
     public void ARosterThatWillNotParseIsNothingRatherThanEmpty() =>
         Assert.Null(MirrorProtocol.DecodeRoster(Encoding.UTF8.GetBytes("{not json}")));
 
+    // CB-105's delivery flag. Present, absent-by-null, and absent-because-the-
+    // far-Buddy-predates-it all have to be told apart: present means an answer,
+    // null means this machine never asked, and missing entirely (an older
+    // Buddy's JSON) has to read exactly like null rather than fail to parse.
+    [Fact]
+    public void ARosterEntryCarriesCanDeliverWhenPresent()
+    {
+        var entries = new List<MirrorProtocol.MirrorRosterEntry>
+        {
+            new("job-hunter", MirrorProtocol.CliClaudeCode, true, false, CanDeliver: true),
+            new("typable", MirrorProtocol.CliClaudeCode, true, true, CanDeliver: false)
+        };
+
+        var back = MirrorProtocol.DecodeRoster(MirrorProtocol.EncodeRoster(entries));
+
+        Assert.NotNull(back);
+        Assert.True(back![0].CanDeliver);
+        Assert.False(back[1].CanDeliver);
+    }
+
+    [Fact]
+    public void ARosterEntryOmitsCanDeliverFromTheWireWhenNull()
+    {
+        var entries = new List<MirrorProtocol.MirrorRosterEntry>
+        {
+            new("job-hunter", MirrorProtocol.CliClaudeCode, true, true)
+        };
+
+        var json = Encoding.UTF8.GetString(MirrorProtocol.Gunzip(MirrorProtocol.EncodeRoster(entries)));
+
+        Assert.DoesNotContain("deliver", json);
+    }
+
+    // The back-compat case: an older Buddy's roster JSON never mentions
+    // delivery at all, and that has to parse exactly as cleanly as one that
+    // mentions it and answers null.
+    [Fact]
+    public void ARosterEntryMissingCanDeliverEntirelyStillParsesAsNull()
+    {
+        var json = "[{\"name\":\"job-hunter\",\"cli\":\"claude\",\"transcript\":true,\"pane\":false}]";
+
+        var back = MirrorProtocol.DecodeRoster(MirrorProtocol.Gzip(Encoding.UTF8.GetBytes(json)));
+
+        Assert.Null(Assert.Single(back!).CanDeliver);
+    }
+
     // --- which rows are worth sending -------------------------------------------
 
     // The filter is the parsers' own, which is what makes the mirror equal to a

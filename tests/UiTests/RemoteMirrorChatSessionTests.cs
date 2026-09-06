@@ -56,6 +56,16 @@ public class RemoteMirrorChatSessionTests : IDisposable
     private bool _mangle;
     private bool _mangleInput;
 
+    // CB-105's messaging fallback. Defaults keep every test written before it
+    // seeing exactly what it saw before: _canDeliver false means
+    // `_seams.CanDeliver?.Invoke(status) == true` is false, which falls
+    // straight to ErrNoPane the same as it always has.
+    private bool _canDeliver;
+    private DeliveryResult _deliverResult = DeliveryResult.Accepted;
+    private string? _deliverAgentStatus;
+    private bool _deliverThrows;
+    private readonly List<(string Name, string Text)> _delivered = new();
+
     private readonly bool _remoteWasEnabled;
 
     public RemoteMirrorChatSessionTests()
@@ -171,6 +181,25 @@ public class RemoteMirrorChatSessionTests : IDisposable
         Assert.Contains("Message", session.ComposerHint);
         Assert.DoesNotContain("terminal", session.ComposerHint);
         Assert.Contains(Name, session.ComposerHint);
+    }
+
+    // CB-105's third arm: no pane, but this machine can hand the text to the
+    // far session's own messaging socket instead — a live view that is real
+    // and a composer that says something more useful than the plain
+    // "Message…" a headless session got before this feature existed.
+    [AvaloniaFact]
+    public async Task TheComposerOffersDeliveryWhenThereIsNoPaneButThereIsASocket()
+    {
+        _canType = false;
+        _canDeliver = true;
+
+        Wire("a", "b");
+
+        var session = await OpenAsync();
+
+        Assert.Contains(Name, session.ComposerHint);
+        Assert.Contains("background job", session.ComposerHint);
+        Assert.DoesNotContain("terminal", session.ComposerHint);
     }
 
     // A live view is a real transcript, so it can be paged back into — which is
@@ -515,6 +544,93 @@ public class RemoteMirrorChatSessionTests : IDisposable
             t => t.Role == ChatRole.System && t.Text.Contains(Name));
     }
 
+    // --- CB-105: delivering to a session with no pane at all -------------------
+
+    // The mirrored transcript is what actually settles the pending turn — same
+    // as a typed send — so this only asserts the note that appears while it is
+    // still waiting for that echo, plus the fact that a delivery was actually
+    // attempted rather than typed.
+    [AvaloniaFact]
+    public async Task SendingWithNoPaneButASocketHandsItOverAndSaysSo()
+    {
+        _canType = false;
+        _canDeliver = true;
+        _deliverAgentStatus = "working";
+
+        Wire("a", "b");
+        var session = await OpenAsync();
+
+        await session.SendAsync("still there?");
+
+        Assert.Equal("still there?", Assert.Single(_delivered).Text);
+        Assert.Empty(_typed);
+
+        Assert.Contains(session.History,
+            t => t.Role == ChatRole.System && t.Text.Contains("Handed to") && t.Text.Contains("mid-turn"));
+
+        // The typed message stays on screen, still pending — nothing here
+        // settles it early. Once the far transcript's own next turn produces
+        // the row, Echoes settles it exactly as it already does for a typed
+        // send.
+        Assert.Contains(session.History, t => t.Role == ChatRole.User && t.Text == "still there?");
+    }
+
+    // The mirrored transcript settling the pending turn once the far session's
+    // own next turn writes the row — the same mechanism a typed send already
+    // relies on, exercised here for the messaging path.
+    [AvaloniaFact]
+    public async Task ADeliveredMessageIsSettledByTheEchoJustLikeATypedOne()
+    {
+        _canType = false;
+        _canDeliver = true;
+
+        Wire("a", "b");
+        var session = await OpenAsync();
+
+        var updated = 0;
+        session.TurnUpdated += _ => updated++;
+
+        await session.SendAsync("still there?");
+
+        Append(UserRow("u2", "still there?"));
+        await _server.TickAsync();
+
+        Assert.Equal(1, updated);
+        // Adopted the turn already on screen rather than adding a second one.
+        Assert.Single(Turns(session), t => t.Text == "still there?");
+    }
+
+    [AvaloniaFact]
+    public async Task ASessionTheRegistryNoLongerKnowsAboutSaysTheJobMayHaveStopped()
+    {
+        _canType = false;
+        _canDeliver = true;
+        _deliverResult = DeliveryResult.NoRegistryEntry;
+
+        Wire("a", "b");
+        var session = await OpenAsync();
+
+        await session.SendAsync("hello?");
+
+        Assert.Contains(session.History,
+            t => t.Role == ChatRole.System && t.Text.Contains("the job may have stopped"));
+    }
+
+    [AvaloniaFact]
+    public async Task ASocketThatRefusesTheDeliverySaysNothingWasSent()
+    {
+        _canType = false;
+        _canDeliver = true;
+        _deliverResult = DeliveryResult.SocketRefused;
+
+        Wire("a", "b");
+        var session = await OpenAsync();
+
+        await session.SendAsync("hello?");
+
+        Assert.Contains(session.History,
+            t => t.Role == ChatRole.System && t.Text.Contains("nothing was sent"));
+    }
 
     // --- keeping up ---------------------------------------------------------------
 
@@ -1141,6 +1257,14 @@ public class RemoteMirrorChatSessionTests : IDisposable
             {
                 _typed.Add((status.Title, text));
                 return Task.FromResult(true);
+            },
+            CanDeliver: status => _canDeliver,
+            Deliver: async (status, text) =>
+            {
+                if (_deliverThrows) throw new InvalidOperationException("messaging socket went away");
+
+                _delivered.Add((status.Title, text));
+                return new DeliveryReceipt(_deliverResult, _deliverAgentStatus);
             },
             // Who may ask, which the server no longer guesses. It used to fall
             // back to a name test — anything called `claude-buddy-rc-…` was

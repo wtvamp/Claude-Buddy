@@ -87,6 +87,33 @@ public class TypingRefusalTests
         Assert.Contains(Remote, said);
     }
 
+    // --- CB-105: the messaging fallback's own refusals -------------------------
+
+    // The far session's own registry entry is gone — almost always because the
+    // background job it named has since stopped. Distinct from no-pane, which
+    // still has a live session behind it; this one has neither a terminal nor a
+    // socket.
+    [Fact]
+    public void ANoLongerRegisteredSessionSaysTheJobMayHaveStopped()
+    {
+        var said = RemoteControlChatSession.TypingRefusal(MirrorProtocol.ErrNotRegistered, Remote);
+
+        Assert.Contains(Remote, said);
+        Assert.Contains("the job may have stopped", said);
+    }
+
+    // A registration was found and the socket still refused it — the delivery
+    // equivalent of ErrTypeFailed above.
+    [Fact]
+    public void ADeliveryTheSocketRefusedSaysNothingWasSent()
+    {
+        var said = RemoteControlChatSession.TypingRefusal(MirrorProtocol.ErrDeliverFailed, Remote);
+
+        Assert.Contains(Remote, said);
+        Assert.Contains("refused the connection", said);
+        Assert.Contains("nothing was sent", said);
+    }
+
     // Refused rather than typed in a form you did not write — which is the
     // whole point of hashing the input, and the note says so because "it
     // failed" would leave someone wondering whether half of it went through.
@@ -120,9 +147,78 @@ public class TypingRefusalTests
     [InlineData(MirrorProtocol.ErrNoPane)]
     [InlineData(MirrorProtocol.ErrNoSession)]
     [InlineData(MirrorProtocol.ErrBadHash)]
+    [InlineData(MirrorProtocol.ErrNotRegistered)]
+    [InlineData(MirrorProtocol.ErrDeliverFailed)]
     [InlineData("anything else")]
     public void NoRefusalIsSilent(string code) =>
         Assert.NotEmpty(RemoteControlChatSession.TypingRefusal(code, Remote));
+
+    // --- CB-105: the composer hint's third arm ---------------------------------
+
+    [Fact]
+    public void NotMirroringSaysMessage()
+    {
+        var said = RemoteControlChatSession.ComposerHintFor(
+            mirroring: false, canType: false, canDeliver: false, Remote);
+
+        Assert.Equal($"Message {Remote} on the other machine…", said);
+    }
+
+    [Fact]
+    public void MirroringWithAPaneSaysType()
+    {
+        var said = RemoteControlChatSession.ComposerHintFor(
+            mirroring: true, canType: true, canDeliver: false, Remote);
+
+        Assert.Equal($"Type into {Remote}'s terminal on the other machine…", said);
+    }
+
+    // The new arm: a live view, no pane, but this machine can hand the text to
+    // the far session's own messaging socket instead.
+    [Fact]
+    public void MirroringWithNoPaneButDeliverableSaysMessageTheBackgroundJob()
+    {
+        var said = RemoteControlChatSession.ComposerHintFor(
+            mirroring: true, canType: false, canDeliver: true, Remote);
+
+        Assert.Contains(Remote, said);
+        Assert.Contains("background job", said);
+        Assert.Contains("next turn", said);
+    }
+
+    // Neither a pane nor a delivery seam: the same wording as not mirroring at
+    // all, which is what this always said before CB-105 existed.
+    [Fact]
+    public void MirroringWithNoPaneAndNoDeliverySaysMessageAsBefore()
+    {
+        var said = RemoteControlChatSession.ComposerHintFor(
+            mirroring: true, canType: false, canDeliver: false, Remote);
+
+        Assert.Equal($"Message {Remote} on the other machine…", said);
+    }
+
+    // --- CB-105: the delivered-remotely note ------------------------------------
+
+    [Fact]
+    public void DeliveredWhileWorkingSaysItWillReadItAtTheEndOfThisTurn()
+    {
+        var said = RemoteControlChatSession.DeliveredRemotelyNote(Remote, "working");
+
+        Assert.Contains(Remote, said);
+        Assert.Contains("mid-turn", said);
+    }
+
+    [Theory]
+    [InlineData("idle")]
+    [InlineData(null)]
+    public void DeliveredOtherwiseSaysItArrivesAsAMessage(string? agentStatus)
+    {
+        var said = RemoteControlChatSession.DeliveredRemotelyNote(Remote, agentStatus);
+
+        Assert.Contains(Remote, said);
+        Assert.Contains("not keystrokes", said);
+        Assert.Contains("slash commands won't run", said);
+    }
 
     // ---- a sent message that is still waiting to be matched ----------------
 
