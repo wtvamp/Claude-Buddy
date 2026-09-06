@@ -42,8 +42,18 @@ namespace ClaudeBuddy
         // safe", per the spec this was built against — because this is the
         // one place a stray '"' or '<' in a machine or agent name would
         // otherwise break out of the attribute it's placed in.
-        internal static string Wrap(string fromName, string text) =>
-            $"<cross-session-message from=\"{SanitizeFromName(fromName)}\" from-mode=\"prompting\">\n{text}\n</cross-session-message>";
+        //
+        // A real Claude Code relay carries `from` (a session/relay id) and
+        // `from-name` (a human-readable name) as two separate attributes, and
+        // BridgeProtocol.ParseInboundMessages requires `from-name` to
+        // attribute a message at all — it silently drops a tag that lacks it.
+        // Buddy has no separate session-id-shaped identifier of its own to
+        // put in `from`, so both attributes carry the same sanitized name.
+        internal static string Wrap(string fromName, string text)
+        {
+            var sanitized = SanitizeFromName(fromName);
+            return $"<cross-session-message from=\"{sanitized}\" from-name=\"{sanitized}\" from-mode=\"prompting\">\n{text}\n</cross-session-message>";
+        }
 
         private static string SanitizeFromName(string fromName)
         {

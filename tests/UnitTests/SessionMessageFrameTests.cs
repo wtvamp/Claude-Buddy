@@ -18,7 +18,7 @@ public class SessionMessageFrameTests
         var wrapped = SessionMessageFrame.Wrap("Claude Buddy on mini", "hello there");
 
         Assert.Equal(
-            "<cross-session-message from=\"Claude Buddy on mini\" from-mode=\"prompting\">\n" +
+            "<cross-session-message from=\"Claude Buddy on mini\" from-name=\"Claude Buddy on mini\" from-mode=\"prompting\">\n" +
             "hello there\n" +
             "</cross-session-message>",
             wrapped);
@@ -33,7 +33,7 @@ public class SessionMessageFrameTests
         var wrapped = SessionMessageFrame.Wrap(dirty, "text");
 
         Assert.Equal(
-            $"<cross-session-message from=\"{clean}\" from-mode=\"prompting\">\ntext\n</cross-session-message>",
+            $"<cross-session-message from=\"{clean}\" from-name=\"{clean}\" from-mode=\"prompting\">\ntext\n</cross-session-message>",
             wrapped);
     }
 
@@ -45,7 +45,7 @@ public class SessionMessageFrameTests
         var wrapped = SessionMessageFrame.Wrap(longName, "text");
 
         Assert.Equal(
-            $"<cross-session-message from=\"{new string('a', 64)}\" from-mode=\"prompting\">\ntext\n</cross-session-message>",
+            $"<cross-session-message from=\"{new string('a', 64)}\" from-name=\"{new string('a', 64)}\" from-mode=\"prompting\">\ntext\n</cross-session-message>",
             wrapped);
     }
 
@@ -60,7 +60,7 @@ public class SessionMessageFrameTests
         var wrapped = SessionMessageFrame.Wrap(dirty, "text");
 
         Assert.Equal(
-            $"<cross-session-message from=\"{new string('a', 64)}\" from-mode=\"prompting\">\ntext\n</cross-session-message>",
+            $"<cross-session-message from=\"{new string('a', 64)}\" from-name=\"{new string('a', 64)}\" from-mode=\"prompting\">\ntext\n</cross-session-message>",
             wrapped);
     }
 
@@ -70,10 +70,26 @@ public class SessionMessageFrameTests
         var wrapped = SessionMessageFrame.Wrap("buddy", "line one\nline two\nline three");
 
         Assert.Equal(
-            "<cross-session-message from=\"buddy\" from-mode=\"prompting\">\n" +
+            "<cross-session-message from=\"buddy\" from-name=\"buddy\" from-mode=\"prompting\">\n" +
             "line one\nline two\nline three\n" +
             "</cross-session-message>",
             wrapped);
+    }
+
+    // The actual proof this shape is correct: BridgeProtocol.ParseInboundMessages
+    // requires from-name to attribute a message at all (see its own doc
+    // comment), and Wrap used to omit it entirely — silently dropping every
+    // delivery this frame produced once it round-tripped through a transcript.
+    [Fact]
+    public void WrapsOutputRoundTripsThroughBridgeProtocolParseInboundMessages()
+    {
+        var wrapped = SessionMessageFrame.Wrap("Claude Buddy on mini", "do the thing");
+
+        var messages = BridgeProtocol.ParseInboundMessages(wrapped);
+
+        var message = Assert.Single(messages);
+        Assert.Equal("Claude Buddy on mini", message.FromName);
+        Assert.Equal("do the thing", message.Body);
     }
 
     // --- Encode -------------------------------------------------------------
