@@ -4,6 +4,7 @@ using Avalonia.Animation;
 using Avalonia.Animation.Easings;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Controls.Primitives.PopupPositioning;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
@@ -190,6 +191,8 @@ namespace ClaudeBuddy
                 ScheduleFlyoutHide();
             };
 
+            ConfigureThoughtBubblePlacement(Root);
+
             // Unlike WPF, Loaded fires *after* the first UpdateFrom here, so
             // honor any state that already arrived instead of stomping it.
             Loaded += (_, _) =>
@@ -306,8 +309,6 @@ namespace ClaudeBuddy
                 _lastTipTitle = tipTitle;
                 _lastTipPath = tipPath;
             }
-
-            ToolTip.SetPlacement(Root, PlacementMode.Top);
 
             _lastGlyphName = name;
             ApplyAvatar(status);
@@ -1022,6 +1023,68 @@ namespace ClaudeBuddy
         // sits below the button, where the same dots point at nothing and read
         // as a rendering fault. Sharing the palette and dropping the tail keeps
         // one look without claiming a button is thinking.
+        // Both orb windows are tiny (56x56 here, 72x72 for an account orb) and
+        // Topmost, so their thought bubble has to render outside the window's
+        // own bounds — Avalonia backs that with a real, separate native popup
+        // window rather than drawing inside Root. `PlacementMode.Top`'s own
+        // math put that popup's bounds overlapping Root's: caught live off
+        // the window server (CGWindowListCopyWindowInfo), a fresh popup
+        // window id opening and closing every ~20-25ms for as long as the
+        // hover lasted. The mechanism: the popup's bounds overlap Root's
+        // pixel under the cursor, the OS hands "topmost under the cursor" to
+        // the newly-opened popup, Avalonia reads that as the pointer leaving
+        // Root and closes the tooltip, the OS hands the cursor back to Root,
+        // Avalonia reopens it — a self-sustaining ~40Hz loop, which reads as
+        // flicker rather than as discrete blinks. AccountOrbWindow never set
+        // a Placement at all, which defaults to Pointer — the popup opens
+        // wherever the cursor already is, i.e. inside its own anchor, the
+        // same failure by a different route.
+        //
+        // Two earlier rounds (CB-104) each fixed a real bug in the tooltip's
+        // *content* churning open/closed on every session poll while the
+        // pointer sat still. Both fixes stay; this is a separate mechanism —
+        // geometry, not content — so it needed a separate fix.
+        //
+        // PlacementMode.Custom sidesteps whatever Top's default math is
+        // actually doing (undocumented, and this Avalonia version's source
+        // wasn't available locally to read it): the callback below computes
+        // the box itself, anchored to Root's own top edge and grown upward,
+        // so it cannot land on top of Root regardless of platform quirks.
+        // Call once, from the constructor — not every poll tick — since the
+        // callback never changes and there is no reason to touch a popup's
+        // placement while it may be open.
+        internal static void ConfigureThoughtBubblePlacement(Control anchor)
+        {
+            ToolTip.SetPlacement(anchor, PlacementMode.Custom);
+            ToolTip.SetCustomPopupPlacementCallback(anchor, PlaceThoughtBubbleAboveAnchor);
+        }
+
+        // Daylight above the anchor's own top edge, past whatever rounding
+        // either side of the popup positioner does. Not a tuned magic
+        // number: the overlap this replaces measured 78px deep into a 56px-
+        // tall window, so a few px here is a floor against rounding, not an
+        // offset chosen to clear one captured case.
+        private const double ThoughtBubbleClearance = 6;
+
+        private static void PlaceThoughtBubbleAboveAnchor(CustomPopupPlacement placement)
+        {
+            // Anchor = the target's own top-center point; Gravity = the
+            // popup grows in the "up" direction from that point, so its
+            // bottom-center lands on the anchor point before the offset
+            // pushes it clear. Both fully determined by us, not by
+            // PlacementMode.Top's own (evidently unreliable) math.
+            placement.Anchor = PopupAnchor.Top;
+            placement.Gravity = PopupGravity.Top;
+            placement.Offset = new Point(0, -ThoughtBubbleClearance);
+
+            // Never let a screen-edge constraint flip this to Bottom or
+            // Center — flipping back onto the anchor is exactly the bug
+            // being fixed here. An orb pinned at the very top of a display
+            // draws its tooltip partly off-screen instead, which is a far
+            // smaller problem than reopening the flicker loop.
+            placement.ConstraintAdjustment = PopupPositionerConstraintAdjustment.SlideX;
+        }
+
         internal static Control ThoughtBubble(string title, string? path, bool compact = false)
         {
             var bg = Color.Parse("#E6EAECF0");

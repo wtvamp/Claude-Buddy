@@ -112,6 +112,14 @@ namespace ClaudeBuddy
             Root.PointerPressed += OnPressed;
             Root.PointerMoved += OnMoved;
             Root.PointerReleased += OnReleased;
+
+            // Never had an explicit Placement, which defaults to Pointer —
+            // the tooltip opened wherever the cursor already was, i.e.
+            // inside its own 72x72 anchor, the same overlap-driven flicker
+            // OrbWindow had under PlacementMode.Top. See the comment on
+            // OrbWindow.ConfigureThoughtBubblePlacement for the full
+            // mechanism (CB-104).
+            OrbWindow.ConfigureThoughtBubblePlacement(Root);
         }
 
         // Which account this orb is for: the CLAUDE_CONFIG_DIR it was read
