@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
+using System.Text.RegularExpressions;
 using Avalonia.Threading;
 
 namespace ClaudeBuddy
@@ -114,17 +115,32 @@ namespace ClaudeBuddy
         // transcriptHunt is: the real one walks this machine's own projects
         // directories, and the decision worth testing is when Start falls back
         // to it, not what the walk finds.
+        //
+        // messenger and findRegistry are the same kind of seam for the
+        // delivery path CB-105 adds: the real messenger writes to a live Unix
+        // socket and the real registry lookup walks every Claude config root
+        // on disk, and what is worth testing is what this class does with a
+        // receipt or a found-or-not entry, not the socket or the walk
+        // themselves. Both default to a real one, matching findTranscript's
+        // own pattern — production never passes either.
         public LocalCliChatSession(string sessionId, SessionStatus status,
-                                   Func<string, string?>? findTranscript = null)
+                                   Func<string, string?>? findTranscript = null,
+                                   SessionMessenger? messenger = null,
+                                   Func<string, SessionRegistry.Entry?>? findRegistry = null)
         {
             SessionId = sessionId;
             _status = status;
             _format = CliChatFormat.For(status.Source);
             DisplayName = status.Title ?? "";
             _findTranscript = findTranscript ?? (id => TranscriptReader.FindTranscriptFor(id));
+            _messenger = messenger ?? new SessionMessenger(SessionMessenger.Live(ClaudeConfigRoots.All()));
+            _findRegistry = findRegistry ?? (id => SessionRegistry.Find(
+                SessionRegistry.Scan(ClaudeConfigRoots.All()), id, ProcessLiveness.IsRunning));
         }
 
         private readonly Func<string, string?> _findTranscript;
+        private readonly SessionMessenger _messenger;
+        private readonly Func<string, SessionRegistry.Entry?> _findRegistry;
 
         public string SessionId { get; }
 
@@ -521,14 +537,28 @@ namespace ClaudeBuddy
         // would be disk I/O for something that never differs between reads.
         private IReadOnlyList<SlashCommand>? _slashCommands;
 
+        // Empty once the channel is Messaging: a delivered message arrives as a
+        // <cross-session-message>, not as keystrokes, so a built-in slash
+        // command typed into the composer would be sent as plain text to a CLI
+        // that never sees it as a command — see CB-43's messaging-mode note in
+        // RemoteControlChatSession for the same rule over the wire.
         public IReadOnlyList<SlashCommand> SlashCommands =>
-            _slashCommands ??= SlashCommandCatalog.For(_status.Source, _status.Cwd);
+            ChannelIsMessaging
+                ? Array.Empty<SlashCommand>()
+                : (_slashCommands ??= SlashCommandCatalog.For(_status.Source, _status.Cwd));
 
         // --- sending ---
 
+        // Whether CanSendQuietly has already said no and CanDeliver says yes —
+        // asked from both the composer hint and SlashCommands, so it is one
+        // answer rather than two copies that could drift.
+        private bool ChannelIsMessaging =>
+            !TerminalFocuser.CanSendQuietly(_status)
+            && TerminalFocuser.CanDeliver(_status, SessionId, _findRegistry);
+
         public string ComposerHint =>
             ComposerHintFor(
-                TerminalFocuser.CanSendQuietly(_status), _format.ReplyEnabled(),
+                TerminalFocuser.CanSendQuietly(_status), ChannelIsMessaging, _format.ReplyEnabled(),
                 _status.Shape, _status.Presence);
 
         // Both answers are reachable from a test this way, where they were not
@@ -550,10 +580,26 @@ namespace ClaudeBuddy
         // said only "no pane" was hiding the more interesting half of what was
         // true — and a job that has *finished* is a third thing again, which
         // nobody should be typing at, so it says so rather than inviting a reply.
+        // canDeliver is asked before the no-pane branch below, because a
+        // session CanDeliver says yes for has somewhere to go even though
+        // CanSendQuietly said no — a `claude bg-spare` worker or an `--agent`
+        // direct child with a live registry entry, see TerminalTyping.Channel.
+        // A job that has already finished is the one exception: delivering to
+        // it would land in a transcript nothing is going to read, so it keeps
+        // the same "attach and read it" answer a background job with no
+        // registry gets below, rather than inviting a message that goes
+        // nowhere.
         internal static string ComposerHintFor(
-            bool canSendQuietly, bool replyEnabled,
+            bool canSendQuietly, bool canDeliver, bool replyEnabled,
             LocalSessionShape shape, OrbPresence presence)
         {
+            if (canDeliver && !canSendQuietly)
+            {
+                return presence == OrbPresence.Finished
+                    ? "Finished — attach to read it"
+                    : "Message it — it reads this at its next turn";
+            }
+
             if (!canSendQuietly)
             {
                 if (shape != LocalSessionShape.Background) return "No terminal to type into";
@@ -699,12 +745,98 @@ namespace ClaudeBuddy
 
             if (!TerminalFocuser.CanSendQuietly(_status))
             {
+                if (TerminalFocuser.CanDeliver(_status, SessionId, _findRegistry))
+                {
+                    await DeliverViaMessengerAsync(typedText, displayText, imageBytes);
+                    return;
+                }
+
                 Note(NoPaneNote(_status, _status.Shape, OperatingSystem.IsMacOS(), OperatingSystem.IsWindows()));
                 return;
             }
 
             await TypeIntoTerminalAsync(typedText, displayText, imageBytes);
         }
+
+        // Not excluded from coverage, unlike TypeIntoTerminalAsync beside it:
+        // that one is reachable only with a real tmux binary and a real pane,
+        // which nothing here can fake, while this one needs only a fake
+        // SessionMessenger and a fake registry lookup — both already seams on
+        // the constructor — so a test can drive it for real rather than taking
+        // its correctness on faith. See tests/UiTests/LocalCliChatSessionTests.cs.
+        //
+        // Ordering mirrors TypeIntoTerminalAsync exactly and for the same
+        // reason: Add() runs every turn through Reconcile, so _pending has to
+        // be set after the turn is on screen or the user's own message would
+        // settle against itself before DeliverAsync is ever awaited.
+        private async Task DeliverViaMessengerAsync(string typedText, string displayText, byte[]? imageBytes)
+        {
+            var mine = new ChatTurn
+            {
+                Role = ChatRole.User,
+                Text = displayText,
+                IsComplete = true,
+                ImageBytes = imageBytes
+            };
+
+            Add(mine);
+
+            _pending = mine;
+            _pendingRaw = typedText.Trim();
+            _pendingCaption = displayText.Trim();
+            _pendingAt = DateTimeOffset.Now;
+
+            var receipt = await _messenger.DeliverAsync(
+                SessionId, SessionMessenger.FromName(MachineNames.Tag()), typedText, CancellationToken.None);
+
+            Note(DeliveryNote(receipt, DisplayName));
+        }
+
+        // What the composer says once a delivery attempt has actually been
+        // made — as opposed to ComposerHintFor above, which is what it says
+        // beforehand. Never "sent" or "delivered" outright for anything but
+        // Accepted: the socket accepting bytes is the only proof this protocol
+        // ever gets, and the four other arms each name a specific reason
+        // nothing reached the far side rather than a generic failure.
+        //
+        // The AgentStatus branch on Accepted exists because "handed to X" reads
+        // as done when the far session is mid-turn — it is not done, Claude
+        // Code queues it and folds it in once the running turn ends (see
+        // BridgeProtocol's comment on absorbed rows for the same mechanism
+        // over the wire), and a user watching the panel for a reply deserves
+        // to know that before wondering why nothing came back.
+        //
+        // DeliveryResult.WriteFailed has no arm of its own here for the reason
+        // its own doc comment gives: SessionMessenger never produces it today,
+        // folding that case into SocketRefused instead, so the wildcard arm
+        // covers both without a branch that can never be exercised.
+        //
+        // No protocol-version number in the UnsupportedProtocol sentence: an
+        // earlier draft of this feature wanted one, but DeliveryReceipt as
+        // actually built carries only AgentStatus, and adding a version field
+        // to it purely to interpolate into a sentence was judged not worth
+        // widening the foundation layer's own record for. The wire/remote
+        // engineer building the mirror side of this feature reads
+        // DeliveryReceipt unchanged.
+        internal static string DeliveryNote(DeliveryReceipt receipt, string name) => receipt.Result switch
+        {
+            DeliveryResult.Accepted when string.Equals(receipt.AgentStatus, "working", StringComparison.Ordinal) =>
+                $"Handed to {name}. It's mid-turn and will read this when that turn ends — "
+                + "the message shows here once it has.",
+
+            DeliveryResult.Accepted =>
+                $"Handed to {name} for its next turn. It arrives as a message from Claude Buddy, "
+                + "not keystrokes, so built-in slash commands won't run.",
+
+            DeliveryResult.NoRegistryEntry =>
+                $"{name} isn't registered with Claude Code any more — the job may have stopped. "
+                + "Attach it (⚙) to answer it there.",
+
+            DeliveryResult.UnsupportedProtocol =>
+                $"{name} speaks a peer protocol Buddy doesn't recognize, so nothing was sent.",
+
+            _ => "Claude Code's session socket refused the connection; nothing was sent.",
+        };
 
         // A System turn rather than an exception, for the reason
         // OpenClawChatSession gives at the same point: the person has just typed
@@ -790,6 +922,29 @@ namespace ClaudeBuddy
             Note("Couldn't send that to the terminal.");
         }
 
+        // The body of a delivered message, unwrapped from the tag Claude Code's
+        // own transcript holds it in.
+        //
+        // Not BridgeProtocol.ParseInboundMessages, which reads a shape this
+        // isn't: that tag carries a from-name attribute so a multi-hop relay
+        // reply can be correlated back to whichever peer it answers, and its
+        // own guard drops anything without one ("without a sender there is
+        // nothing to attribute the message to"). SessionMessageFrame.Wrap
+        // never writes a from-name — a direct socket delivery already knows
+        // which session it addressed, from the id it dialled rather than from
+        // anything the row says back — so that parser would silently drop
+        // every message this feature ever delivers. This reads the body alone,
+        // which is all Reconcile below needs.
+        private static readonly Regex DeliveredMessageBody = new(
+            @"<cross-session-message\s+[^>]*>(?<body>.*?)</cross-session-message>",
+            RegexOptions.Compiled | RegexOptions.Singleline);
+
+        internal static string? DeliveredBody(string rowText)
+        {
+            var m = DeliveredMessageBody.Match(rowText);
+            return m.Success ? m.Groups["body"].Value.Trim() : null;
+        }
+
         // The transcript will produce the message we just sent, because it went
         // through the terminal — that is the whole design. So the row that comes
         // back adopts the turn already on screen rather than adding a second.
@@ -822,10 +977,24 @@ namespace ClaudeBuddy
             // plus its own placeholder, which ChatTranscript has already
             // stripped down to the caption alone. Both are "this is the
             // message that was just sent" — see the two fields' own comment.
+            //
+            // A third shape only a messenger delivery produces: the row Claude
+            // Code writes back is the whole <cross-session-message> tag it was
+            // actually handed (see SessionMessageFrame.Wrap), not the bare
+            // text — so an exact match against either candidate above always
+            // misses it, and without this a delivered message would settle
+            // nothing and appear a second time once the row arrived.
             if (!string.Equals(incomingText, _pendingRaw, StringComparison.Ordinal)
                 && !string.Equals(incomingText, _pendingCaption, StringComparison.Ordinal))
             {
-                return false;
+                var delivered = DeliveredBody(incoming.Text);
+
+                if (delivered is null
+                    || (!string.Equals(delivered, _pendingRaw, StringComparison.Ordinal)
+                        && !string.Equals(delivered, _pendingCaption, StringComparison.Ordinal)))
+                {
+                    return false;
+                }
             }
 
             // Keep the transcript's timestamp: it is when the session actually

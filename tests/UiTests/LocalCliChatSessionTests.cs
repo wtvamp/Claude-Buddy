@@ -1160,4 +1160,226 @@ public class LocalCliChatSessionTests : IDisposable
         Assert.Equal(2, hunts);
         Assert.Empty(session.History);
     }
+
+    // --- CB-105: delivering to a session with no pane, over its own registry socket ---
+    //
+    // SendCoreAsync's tmux path needs a real tmux binary and a real pane and
+    // cannot be faked — see the comment on TypeIntoTerminalAsync. The
+    // messenger path is different by design: both the SessionMessenger and
+    // the registry lookup are seams on the constructor, so the whole path can
+    // be driven for real against a fake Seams, the same pattern
+    // SessionMessengerTests already uses for the messenger alone.
+    //
+    // findRegistryEntry and messengerEntries are deliberately separate rather
+    // than one list handed to both: CanDeliver's own lookup (findRegistry) and
+    // DeliverAsync's (the messenger's own Seams.Registry) are two different
+    // reads of the same real registry in production, taken a moment apart —
+    // the far session can exit, or stop speaking a protocol this build knows,
+    // between the composer offering to deliver and the send actually landing.
+    // Letting the two diverge in a test is what makes NoRegistryEntry and
+    // UnsupportedProtocol reachable at all: both need CanDeliver to have said
+    // yes a moment ago, and the messenger's own read to disagree now.
+    private static SessionRegistry.Entry RegistryEntry(
+        string sessionId, int peerProtocol = 1, string? status = "idle") =>
+        SessionRegistry.Parse(
+            $$"""
+            {"pid":4242,"sessionId":"{{sessionId}}","messagingSocketPath":"/tmp/a.sock",
+             "peerProtocol":{{peerProtocol}},"status":{{(status is null ? "null" : $"\"{status}\"")}}}
+            """, keyPath: null)!.Value;
+
+    private static (SessionMessenger Messenger, Func<string, SessionRegistry.Entry?> FindRegistry) FakeMessaging(
+        SessionRegistry.Entry? findRegistryEntry,
+        SessionRegistry.Entry[]? messengerEntries = null,
+        bool write = true)
+    {
+        var forMessenger = messengerEntries
+            ?? (findRegistryEntry is { } e ? new[] { e } : Array.Empty<SessionRegistry.Entry>());
+
+        var messenger = new SessionMessenger(new SessionMessenger.Seams(
+            Registry: () => forMessenger,
+            PidAlive: _ => true,
+            ReadKey: _ => null,
+            Write: (_, _, _) => Task.FromResult(write)));
+
+        Func<string, SessionRegistry.Entry?> find = id =>
+            findRegistryEntry is { } found && found.SessionId == id ? found : null;
+
+        return (messenger, find);
+    }
+
+    private static LocalCliChatSession BackgroundSession(
+        string transcriptPath, SessionMessenger messenger, Func<string, SessionRegistry.Entry?> findRegistry,
+        OrbPresence presence = OrbPresence.NeedsInput) =>
+        new("s1", new SessionStatus
+        {
+            Source = SessionSource.ClaudeCode,
+            TranscriptPath = transcriptPath,
+            Shape = LocalSessionShape.Background,
+            Presence = presence,
+            State = "idle",
+            Title = "job-hunter",
+        }, messenger: messenger, findRegistry: findRegistry);
+
+    // The composer hint before anything is typed: a `claude bg-spare` worker
+    // with a live, speaking registry entry gets the new wording rather than
+    // the daemon-attach one, because there is now somewhere for a message to
+    // go even though there is still no pane.
+    [AvaloniaFact]
+    public void ADeliverableBackgroundSessionOffersToBeMessaged()
+    {
+        var (messenger, find) = FakeMessaging(RegistryEntry("s1"));
+        var session = BackgroundSession(Transcript(User("seed", "seed")), messenger, find);
+
+        Assert.Equal("Message it — it reads this at its next turn", session.ComposerHint);
+    }
+
+    // Slash commands don't survive a delivered message — see the property's
+    // own comment — so the catalogue is empty rather than offering commands
+    // that would be sent as plain text to a CLI that never sees them as one.
+    [AvaloniaFact]
+    public void SlashCommandsAreEmptyWhenTheChannelIsMessaging()
+    {
+        var (messenger, find) = FakeMessaging(RegistryEntry("s1"));
+        var session = BackgroundSession(Transcript(User("seed", "seed")), messenger, find);
+
+        Assert.Empty(session.SlashCommands);
+    }
+
+    // Sending it for real: the note left afterwards is DeliveryNote's own
+    // Accepted wording, naming the session by its display name.
+    //
+    // Replying has to be turned on for any of the send tests below — the
+    // first check SendCoreAsync makes, ahead of CanSendQuietly or CanDeliver —
+    // and is restored afterwards, the same pattern every other send test in
+    // this file already follows.
+    [AvaloniaFact]
+    public async Task SendingToADeliverableBackgroundSessionNotesItWasHandedOver()
+    {
+        var before = ClaudeBuddySettings.ClaudeCodeReplyEnabled;
+        try
+        {
+            ClaudeBuddySettings.ClaudeCodeReplyEnabled = true;
+            var (messenger, find) = FakeMessaging(RegistryEntry("s1"));
+            var session = BackgroundSession(Transcript(User("seed", "seed")), messenger, find);
+
+            await session.SendAsync("check the deploy");
+
+            Assert.Contains(session.History,
+                t => t.Text.Contains("Handed to job-hunter", StringComparison.Ordinal));
+        }
+        finally
+        {
+            ClaudeBuddySettings.ClaudeCodeReplyEnabled = before;
+        }
+    }
+
+    // The row Claude Code eventually writes back is the whole
+    // <cross-session-message> tag it was handed, not the bare text — so this
+    // proves the send settles against that row rather than leaving the
+    // message pending forever and showing it a second time when the row
+    // arrives.
+    [AvaloniaFact]
+    public async Task ADeliveredMessageSettlesWhenTheWrappedRowArrivesInTheTranscript()
+    {
+        var before = ClaudeBuddySettings.ClaudeCodeReplyEnabled;
+        try
+        {
+            ClaudeBuddySettings.ClaudeCodeReplyEnabled = true;
+            var (messenger, find) = FakeMessaging(RegistryEntry("s1"));
+            var session = BackgroundSession(Transcript(User("seed", "seed")), messenger, find);
+
+            await session.SendAsync("check the deploy");
+            var beforeEcho = session.History.Count;
+
+            var updated = 0;
+            session.TurnUpdated += _ => updated++;
+
+            var wrapped = "<cross-session-message from=\"Claude Buddy on mini\" from-mode=\"prompting\">\n"
+                          + "check the deploy\n</cross-session-message>";
+            var incoming = new ChatTurn { Role = ChatRole.User, Text = wrapped };
+            Invoke(session, "Add", incoming);
+
+            Assert.Equal(1, updated);
+            Assert.Equal(beforeEcho, session.History.Count);
+            Assert.DoesNotContain(session.History, t => ReferenceEquals(t, incoming));
+        }
+        finally
+        {
+            ClaudeBuddySettings.ClaudeCodeReplyEnabled = before;
+        }
+    }
+
+    // The far session is no longer in the registry at all by the time the
+    // send actually runs — it may have exited a moment after the composer
+    // offered to deliver — and the note points at the one thing that still
+    // works: attaching it.
+    [AvaloniaFact]
+    public async Task SendingWhenTheFarSessionHasLeftTheRegistrySaysSo()
+    {
+        var before = ClaudeBuddySettings.ClaudeCodeReplyEnabled;
+        try
+        {
+            ClaudeBuddySettings.ClaudeCodeReplyEnabled = true;
+            var (messenger, find) = FakeMessaging(
+                findRegistryEntry: RegistryEntry("s1"), messengerEntries: Array.Empty<SessionRegistry.Entry>());
+            var session = BackgroundSession(Transcript(User("seed", "seed")), messenger, find);
+
+            await session.SendAsync("check the deploy");
+
+            Assert.Contains(session.History,
+                t => t.Text.Contains("isn't registered", StringComparison.Ordinal));
+        }
+        finally
+        {
+            ClaudeBuddySettings.ClaudeCodeReplyEnabled = before;
+        }
+    }
+
+    // The far session now speaks a peer protocol this build doesn't
+    // recognize — newer than what CanDeliver saw a moment ago.
+    [AvaloniaFact]
+    public async Task SendingWhenTheFarSessionSpeaksAnUnsupportedProtocolSaysSo()
+    {
+        var before = ClaudeBuddySettings.ClaudeCodeReplyEnabled;
+        try
+        {
+            ClaudeBuddySettings.ClaudeCodeReplyEnabled = true;
+            var (messenger, find) = FakeMessaging(
+                findRegistryEntry: RegistryEntry("s1"),
+                messengerEntries: new[] { RegistryEntry("s1", peerProtocol: 2) });
+            var session = BackgroundSession(Transcript(User("seed", "seed")), messenger, find);
+
+            await session.SendAsync("check the deploy");
+
+            Assert.Contains(session.History,
+                t => t.Text.Contains("peer protocol", StringComparison.Ordinal));
+        }
+        finally
+        {
+            ClaudeBuddySettings.ClaudeCodeReplyEnabled = before;
+        }
+    }
+
+    // The socket itself refuses the connection — nothing session-specific
+    // learned, so the note is the generic one rather than naming the session.
+    [AvaloniaFact]
+    public async Task SendingWhenTheSocketRefusesSaysNothingWasSent()
+    {
+        var before = ClaudeBuddySettings.ClaudeCodeReplyEnabled;
+        try
+        {
+            ClaudeBuddySettings.ClaudeCodeReplyEnabled = true;
+            var (messenger, find) = FakeMessaging(RegistryEntry("s1"), write: false);
+            var session = BackgroundSession(Transcript(User("seed", "seed")), messenger, find);
+
+            await session.SendAsync("check the deploy");
+
+            Assert.Contains(session.History,
+                t => t.Text.Contains("refused the connection", StringComparison.Ordinal));
+        }
+        finally
+        {
+            ClaudeBuddySettings.ClaudeCodeReplyEnabled = before;
+        }
+    }
 }

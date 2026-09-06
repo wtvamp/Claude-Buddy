@@ -419,6 +419,34 @@ namespace ClaudeBuddy
         public static bool CanSendQuietly(SessionStatus? status) =>
             RouteFor(status) != TerminalTyping.Route.None;
 
+        // The sibling question for a session CanSendQuietly has already said no
+        // to: is there still somewhere a message can reach it, over its own
+        // registry socket rather than a pane. sessionId is separate from
+        // status because SessionStatus carries no session id of its own — it
+        // is the status file's name, which every caller here already tracks
+        // apart from the object (LocalCliChatSession.SessionId, the sessionId
+        // parameter TerminalFocuser.Focus already takes) — so the spec this
+        // was built against, which read it off status, named a field that
+        // does not exist and this takes it as its own parameter instead.
+        //
+        // find is SessionMessenger's own shape (a session id in, a registry
+        // Entry back) handed in rather than resolved here, so a caller with no
+        // real registry to scan — a test, most often — can say so without a
+        // live SessionMessenger behind it. The route itself still comes from
+        // this file's own RouteFor, the same wrapper CanSendQuietly uses,
+        // because TerminalTyping.ChannelFor needs to know Route has already
+        // given up before Messaging is even worth asking about.
+        public static bool CanDeliver(
+            SessionStatus? status, string? sessionId, Func<string, SessionRegistry.Entry?> find)
+        {
+            if (string.IsNullOrEmpty(sessionId)) return false;
+
+            var registryLive = find(sessionId) is { } entry && SessionRegistry.Speaks(entry);
+
+            return TerminalTyping.ChannelFor(status, RouteFor(status), registryLive)
+                   == TerminalTyping.Channel.Messaging;
+        }
+
         // The platform and tmux's availability, resolved here so the rule
         // itself stays pure — and asked in this order because probing for a
         // tmux binary costs a PATH walk that a session with no pane recorded

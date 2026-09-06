@@ -170,6 +170,35 @@ namespace ClaudeBuddy
             return Route.None;
         }
 
+        // A narrower question than Route above, and deliberately a separate
+        // concept rather than a seventh arm of it: Route means "a TUI's own
+        // input line, addressed the way bracketed paste and SendPaneKey
+        // already assume" — and a delivered message never goes through that
+        // pipe. Messaging is the answer for a session Route has already given
+        // up on: a `claude bg-spare` pooled worker (Shape == Background) and an
+        // `--agent` direct child the daemon doesn't list (SessionPresence and
+        // ClickRouting.NoCoordinatesAtAll both treat that one specially
+        // already) land on Route.None for different reasons, and both are
+        // exactly "no terminal, so ask the registry instead" — which is why
+        // this function does not need to tell the two apart itself.
+        //
+        // registryLive is a plain bool rather than a lookup run in here, the
+        // same reason Tools above is a parameter instead of a probe: the
+        // caller already knows how to ask SessionRegistry, and folding the
+        // scan into every route decision would charge it to sessions that
+        // never reach Route.None at all.
+        internal enum Channel { None, Terminal, Messaging }
+
+        internal static Channel ChannelFor(SessionStatus? status, Route route, bool registryLive)
+        {
+            if (route != Route.None) return Channel.Terminal;
+
+            if (status is { IsLocalCli: true, Source: SessionSource.ClaudeCode } && registryLive)
+                return Channel.Messaging;
+
+            return Channel.None;
+        }
+
         private static bool Is(string? program, string name) =>
             string.Equals(program, name, StringComparison.OrdinalIgnoreCase);
 
