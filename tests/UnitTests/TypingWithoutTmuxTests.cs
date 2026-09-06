@@ -447,4 +447,75 @@ public class TypingWithoutTmuxTests
 
         Assert.Contains("isn't a CLI session", why, StringComparison.Ordinal);
     }
+
+    // --- CB-105: is there somewhere a message can reach a session with no route --
+
+    // A route always wins, whatever the registry says — Route means a TUI's
+    // own input line, and a session that already has one is answered there.
+    [Fact]
+    public void ARouteAlwaysMeansTerminalRegardlessOfTheRegistry()
+    {
+        Assert.Equal(
+            TerminalTyping.Channel.Terminal,
+            TerminalTyping.ChannelFor(Claude(tmuxPane: "%0"), TerminalTyping.Route.Tmux, registryLive: false));
+
+        Assert.Equal(
+            TerminalTyping.Channel.Terminal,
+            TerminalTyping.ChannelFor(Claude(tmuxPane: "%0"), TerminalTyping.Route.Tmux, registryLive: true));
+    }
+
+    // No route, a Claude Code session, and the registry says it can be
+    // reached: a `claude bg-spare` worker or an `--agent` direct child, either
+    // way the case this feature adds.
+    [Fact]
+    public void NoRouteWithALiveRegistryEntryIsMessaging()
+    {
+        Assert.Equal(
+            TerminalTyping.Channel.Messaging,
+            TerminalTyping.ChannelFor(Claude(), TerminalTyping.Route.None, registryLive: true));
+    }
+
+    // No route and nothing in the registry either: genuinely nowhere.
+    [Fact]
+    public void NoRouteWithNoRegistryEntryIsNone()
+    {
+        Assert.Equal(
+            TerminalTyping.Channel.None,
+            TerminalTyping.ChannelFor(Claude(), TerminalTyping.Route.None, registryLive: false));
+    }
+
+    // A registry entry belongs to a Claude Code session — Codex and Grok have
+    // no such registry, and a status file naming one is not this feature's to
+    // trust.
+    [Fact]
+    public void NoRouteWithALiveRegistryEntryButNotClaudeCodeIsNone()
+    {
+        var codex = Claude();
+        codex.Cli = "codex";
+        codex.Source = SessionSource.Codex;
+
+        Assert.Equal(
+            TerminalTyping.Channel.None,
+            TerminalTyping.ChannelFor(codex, TerminalTyping.Route.None, registryLive: true));
+    }
+
+    // Not a local CLI at all — an OpenClaw conversation has no registry to ask
+    // in the first place, whatever registryLive claims.
+    [Fact]
+    public void NoRouteAndNotALocalCliIsNoneEvenIfToldTheRegistryIsLive()
+    {
+        Assert.Equal(
+            TerminalTyping.Channel.None,
+            TerminalTyping.ChannelFor(
+                new SessionStatus { Cli = "openclaw", Source = SessionSource.OpenClaw },
+                TerminalTyping.Route.None, registryLive: true));
+    }
+
+    [Fact]
+    public void NoStatusAtAllIsNone()
+    {
+        Assert.Equal(
+            TerminalTyping.Channel.None,
+            TerminalTyping.ChannelFor(null, TerminalTyping.Route.None, registryLive: true));
+    }
 }

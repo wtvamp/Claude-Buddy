@@ -684,19 +684,32 @@ namespace ClaudeBuddy
                 TimeSpan.FromSeconds(30), watch, awaitReply: false).ConfigureAwait(false);
         }
 
-        // Types a line into the far session's own terminal.
+        // The richer answer to an INPUT. A typed send has nothing more to say
+        // than whether it worked; a CB-105 delivery over the far session's
+        // messaging socket also carries which channel was used and that
+        // session's own agent status, which the composer hint and the
+        // delivered-note both need to say something honest.
+        internal readonly record struct InputOutcome(string? Error, string? Via, string? AgentStatus);
+
+        // Types a line into the far session's own terminal, or — since
+        // CB-105 — hands it to that session's own messaging socket when
+        // there is no terminal to type into at all.
         //
-        // Null on success; otherwise the error code, which the caller turns into
-        // wording. This is the path that makes /color work again: the text is
-        // typed into that CLI's input line by the Buddy running beside it, so
-        // its own command handler runs it, exactly as it would locally.
-        public async Task<string?> SendInputAsync(string name, string text)
+        // Null Error on success; otherwise the error code, which the caller
+        // turns into wording. A typed send is the path that makes /color
+        // work again: the text is typed into that CLI's input line by the
+        // Buddy running beside it, so its own command handler runs it,
+        // exactly as it would locally. A delivered send has no such
+        // guarantee — see MirrorProtocol's note on why there is no ack on
+        // this wire at all.
+        public async Task<InputOutcome> SendInputDetailedAsync(string name, string text)
         {
             string relay;
 
             lock (_gate)
             {
-                if (!_servedBy.TryGetValue(name, out var found)) return MirrorProtocol.ErrNoSession;
+                if (!_servedBy.TryGetValue(name, out var found))
+                    return new InputOutcome(MirrorProtocol.ErrNoSession, null, null);
                 relay = found;
             }
 
@@ -707,10 +720,17 @@ namespace ClaudeBuddy
                 TimeSpan.FromSeconds(MirrorProtocol.InputTimeoutSeconds))
                 .ConfigureAwait(false);
 
-            if (reply.Ok) return null;
+            if (!reply.Ok) return new InputOutcome(reply.ErrCode ?? MirrorProtocol.ErrUnsupported, null, null);
 
-            return reply.ErrCode ?? MirrorProtocol.ErrUnsupported;
+            return new InputOutcome(
+                null,
+                reply.Fields is not null && reply.Fields.TryGetValue("via", out var via) ? via : null,
+                reply.Fields is not null && reply.Fields.TryGetValue("agent", out var agent) ? agent : null);
         }
+
+        // Kept for callers that only ever cared whether a send worked.
+        public async Task<string?> SendInputAsync(string name, string text) =>
+            (await SendInputDetailedAsync(name, text).ConfigureAwait(false)).Error;
 
         // Excluded from coverage: reaching it needs a payload that passes every
         // per-piece hash *and* the whole-payload hash and still is not a turn

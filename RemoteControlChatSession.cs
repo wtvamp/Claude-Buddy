@@ -132,9 +132,29 @@ namespace ClaudeBuddy
         // Said in the input box itself. "Message…" would be a lie by omission
         // here: this one leaves the machine, and in live view it is typed into
         // somebody else's terminal, which is worth being even plainer about.
-        public string ComposerHint => _mirroring && _canType
-            ? $"Type into {_remoteName}'s terminal on the other machine…"
-            : $"Message {_remoteName} on the other machine…";
+        public string ComposerHint => ComposerHintFor(_mirroring, _canType, _canDeliver, _remoteName);
+
+        // Pure and static so the three-way choice is a unit test rather than
+        // a screenshot — the same arrangement WaitLabel and FetchingNote are
+        // already under.
+        //
+        // **The third arm is CB-105's.** A live view used to mean exactly one
+        // of two things: type into a terminal, or nothing — a pane-less
+        // session got the same "Message…" wording as no live view at all,
+        // which was honest before this feature existed and stopped being
+        // honest the moment there was a second way to reach it. A background
+        // or agent-mode job has no terminal and never will, so
+        // `mirroring && !canType` no longer automatically means "can't
+        // send" — canDeliver says whether this machine can hand the text to
+        // that session's own messaging socket instead.
+        internal static string ComposerHintFor(bool mirroring, bool canType, bool canDeliver, string name) =>
+            !mirroring
+                ? $"Message {name} on the other machine…"
+                : canType
+                    ? $"Type into {name}'s terminal on the other machine…"
+                    : canDeliver
+                        ? $"Message {name}'s background job on the other machine — it reads this at its next turn…"
+                        : $"Message {name} on the other machine…";
 
         // Whether the far session actually has an input line to type into.
         //
@@ -150,6 +170,15 @@ namespace ClaudeBuddy
         // "Sent as a message rather than typed … there is no input line to type
         // into." Both were on screen at once, and only one of them was true.
         private bool _canType;
+
+        // Whether this machine can hand text to the far session's own
+        // messaging socket when there is no pane to type into — CB-105's
+        // second delivery path, for a background or agent-mode job that
+        // never has a terminal at all. Read off the same roster entry
+        // _canType is, and for the same reason _canType's own comment gives:
+        // a hint that offered a send it cannot deliver would be lying in the
+        // one place it matters.
+        private bool _canDeliver;
 
         // In live view: every command that session can run, read off the far
         // machine's own disk by the Buddy sitting next to it — built-ins
@@ -201,6 +230,7 @@ namespace ClaudeBuddy
 
             _mirroring = true;
             _canType = entry.HasPane;
+            _canDeliver = entry.CanDeliver ?? false;
             _format = CliChatFormat.For(
                 entry.Cli.Equals(MirrorProtocol.CliCodex, StringComparison.OrdinalIgnoreCase)
                     ? SessionSource.Codex
@@ -592,8 +622,22 @@ namespace ClaudeBuddy
 
             RemoteControlSessions.Touch();
 
-            var error = await client.SendInputAsync(_remoteName, text).ConfigureAwait(true);
-            if (error is null) return;
+            var outcome = await client.SendInputDetailedAsync(_remoteName, text).ConfigureAwait(true);
+
+            if (outcome.Error is null)
+            {
+                // Delivered over the messaging channel rather than typed.
+                // _pending stays set exactly as it does for a typed send —
+                // there is no ack on this wire either way, only the far
+                // transcript's own next turn, and Echoes already knows how
+                // to recognise this message coming back through it, the same
+                // way it already does for the old relay fallback's
+                // cross-session-message tag.
+                if (string.Equals(outcome.Via, MirrorProtocol.ViaMessage, StringComparison.Ordinal))
+                    Note(DeliveredRemotelyNote(_remoteName, outcome.AgentStatus));
+
+                return;
+            }
 
             // No terminal to type into is a missing mechanism, not a refusal, and
             // the messaging channel this panel used before it upgraded still
@@ -615,8 +659,24 @@ namespace ClaudeBuddy
             // request arriving over a wire does not change it.
             _pending = null;
 
-            Note(TypingRefusal(error, _remoteName));
+            Note(TypingRefusal(outcome.Error, _remoteName));
         }
+
+        // What the panel says when a message was handed to a background
+        // job's own messaging socket rather than typed into a terminal —
+        // CB-105's second delivery path.
+        //
+        // There is no ack on the wire this rides — MirrorProtocol's own note
+        // says why: a successful hand-off only ever means "accepted for
+        // delivery". So this is exactly as provisional as the ordinary
+        // typed-echo wait: the transcript itself is still what settles the
+        // pending turn, once that session's own next turn writes the row.
+        internal static string DeliveredRemotelyNote(string remoteName, string? agentStatus) =>
+            agentStatus == "working"
+                ? $"Handed to {remoteName}. It's mid-turn and will read this when that turn ends — "
+                  + "the message shows here once it has."
+                : $"Handed to {remoteName} for its next turn. It arrives as a message from Claude "
+                  + "Buddy, not keystrokes, so built-in slash commands won't run.";
 
         // What a refused keystroke says, as a function of the code that came
         // back rather than as a switch buried in the send.
@@ -670,6 +730,22 @@ namespace ClaudeBuddy
 
                 MirrorProtocol.ErrNoSession =>
                     $"The other machine's Claude Buddy no longer has a session called {remoteName}.",
+
+                // The messaging fallback tried, and Claude Code's own
+                // registry no longer has an entry for this session — almost
+                // always because the background job it named has since
+                // stopped. Unlike ErrNoPane, there is no terminal *or* socket
+                // to reach it through any more.
+                MirrorProtocol.ErrNotRegistered =>
+                    $"{remoteName} isn't registered with Claude Code any more — the job may have "
+                    + "stopped.",
+
+                // The messaging fallback found a registration and the socket
+                // still refused it. A route was found here too, same as
+                // ErrTypeFailed above, and it declined it.
+                MirrorProtocol.ErrDeliverFailed =>
+                    $"{remoteName}'s machine found the session but its messaging socket refused the "
+                    + "connection; nothing was sent.",
 
                 MirrorProtocol.ErrBadHash =>
                     "That message didn't survive the trip intact and was refused rather than typed "

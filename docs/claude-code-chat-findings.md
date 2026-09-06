@@ -108,17 +108,27 @@ Three measured details:
 - The pane id in `SessionStatus.TmuxPane` matches `tmux list-panes` exactly, and
   Claude Code's own `~/.claude/sessions/<pid>.json` records the same pane.
 
-### There is an IPC channel, and it is not usable
+### There is an IPC channel, and it is now used for exactly the case `tmux send-keys` cannot cover
 
 Claude Code registers every running session in `~/.claude/sessions/<pid>.json`
 with `messagingSocketPath: /tmp/cc-socks/<pid>.sock`, `peerProtocol: 1`, and a
 sibling `.key` file. That is how one session's `SendMessage` reaches another.
 
-It is **not** used here. There is no public CLI for it (`claude --help` exposes
-no such subcommand), the protocol is undocumented, and it is versioned only by
-an integer that a Claude Code upgrade may increment. `tmux send-keys` is a
-public, stable interface that does the same job. Recorded because it is the
-obvious thing to reach for next time and the reasons not to are not obvious.
+This section used to end there, on the reasoning that `tmux send-keys` is a
+public, stable interface that does the same job and there was no reason to
+touch an undocumented, integer-versioned channel instead. **That reasoning
+holds whenever a pane exists, and it is exactly false when one does not.** A
+background job (`claude bg-...`) or an `--agent` direct child never has a
+tmux pane to send keys into in the first place — there is nothing for the
+public interface to do the same job *as*. CB-105 (`docs/headless-delivery-
+findings.md`) adds this socket as the second delivery route, used only when
+`TerminalTyping.ChannelFor` has already established there is no pane: the
+protocol risk this section originally warned about (undocumented, versioned by
+a bare integer) is unchanged and is why `SessionRegistry.Speaks` refuses
+anything but `peerProtocol: 1` by name rather than guessing at a newer shape.
+See that doc for what was actually confirmed live against Claude Code
+`2.1.263`, including a receiver-side behaviour (a permission-mode gate that can
+hold a delivery unattended) the original reverse-engineering did not surface.
 
 ## The permission dialog
 

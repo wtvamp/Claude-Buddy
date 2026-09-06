@@ -897,6 +897,20 @@ be a lie about work you are watching happen.
 Nothing here hides an orb. A parked job is real, resumable and worth clicking,
 and how long a quiet session stays on screen is what **"Keep orbs for"** is for.
 
+**Messaging one.** A background job or an `--agent` child never has a terminal
+to type into or attach to at all, on any machine — the ⚙ badge above is what it
+is, not a temporary state. Its chat panel offers a send anyway: the message is
+handed to Claude Code's own IPC socket for that session rather than typed
+into a pane that doesn't exist, and it reads at the session's next turn, not
+immediately — the composer says so ("Message it — it reads this at its next
+turn") rather than implying a pane it doesn't have. It arrives as a message
+from Claude Buddy, not as keystrokes, so **built-in slash commands don't run**
+this way, though a project's own custom skill commands do, since those are
+just instructions the model reads. This works both for a background job on
+this machine and, over the mirror link, for one on a peer machine — the same
+mechanism either way, just addressed through the far Buddy instead of straight
+to the socket. See `docs/headless-delivery-findings.md` for what was measured.
+
 ## Chatting with a session from its orb
 
 Hover an orb and the flyout has a keyboard button (⌨). It opens a small panel
@@ -928,11 +942,15 @@ and being able to drive it are different powers, so the second one is asked for
 separately — the same split the OpenClaw section below makes, for the same
 reason.
 
-**Sessions not running under tmux stay read-only.** The only way to type into
-those is to bring their terminal to the front first, which defeats the point of
+**A session with no pane stays read-only unless it has a live messaging
+socket.** The only way to type into one running under something other than
+tmux is to bring its terminal to the front first, which defeats the point of
 chatting from an orb; dictation already does that and is welcome to, but a chat
-panel that raised a window on every message would not be one. The input box says
-so rather than being greyed out.
+panel that raised a window on every message would not be one. A background job
+or an `--agent` child never has a pane to bring forward at all — for those the
+panel falls back to messaging instead, per "Messaging one" above, rather than
+refusing outright. The input box says which is true rather than being greyed
+out either way.
 
 When a session stops for a **permission prompt**, the panel says so and offers
 the dialog's own options as buttons. It reads them off the pane with

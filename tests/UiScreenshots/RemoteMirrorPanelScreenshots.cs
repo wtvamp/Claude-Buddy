@@ -159,6 +159,27 @@ public class RemoteMirrorPanelScreenshots : IDisposable
             ChatPanelTestAccess.Instance!, "chat-panel-remote-fetching.png");
     }
 
+    // The other shape a live view can be in: a background or agent-mode job
+    // with no pane at all, where this machine can still hand it text over its
+    // own messaging socket. The composer has to say something different from
+    // both "type into…" and plain "message…" here, or a headless session
+    // reads as unreachable when it is not — CB-105.
+    [AvaloniaFact]
+    public async Task ALiveViewWithNoPaneOffersToMessageTheBackgroundJob()
+    {
+        Wire(canType: false, canDeliver: true,
+            ("user", "still going?"),
+            ("assistant", "yes — deploying now"));
+
+        var session = Open();
+        await _client.DiscoverAsync(Peers, new[] { Name });
+
+        ChatPanel.OpenFor(NewOrb(), session);
+        ScreenshotHelper.Flush();
+        ScreenshotHelper.CaptureAlreadyShown(
+            ChatPanelTestAccess.Instance!, "chat-panel-remote-live-view-deliverable.png");
+    }
+
     // --- wiring -------------------------------------------------------------------
 
     private bool _mangle;
@@ -184,7 +205,11 @@ public class RemoteMirrorPanelScreenshots : IDisposable
     // The machines to ask, by name. The relay-shaped list this replaced had
     // to be filtered down to the same answer a direct link simply knows.
     private static IReadOnlyList<string> Peers => new[] { FarRelay };
-    private void Wire(params (string Role, string Text)[] turns)
+    private void Wire(params (string Role, string Text)[] turns) => Wire(true, false, turns);
+
+    // CB-105's shape: a session with no pane to type into but a machine that
+    // can hand it text over its own messaging socket instead.
+    private void Wire(bool canType, bool canDeliver, params (string Role, string Text)[] turns)
     {
         _path = Path.Combine(_dir, "session.jsonl");
 
@@ -206,20 +231,23 @@ public class RemoteMirrorPanelScreenshots : IDisposable
             SessionPid = 4242
         }));
 
-        Build();
+        Build(canType, canDeliver);
     }
 
-    private void WireEmpty() => Build();
+    private void WireEmpty() => Build(true, false);
 
-    private void Build()
+    private void Build(bool canType = true, bool canDeliver = false)
     {
         _server = new RemoteMirrorServer(Account, new RemoteMirrorServer.Seams(
             SendToClientAsync,
             () => _sessions,
             () => _agents,
             _ => true,
-            _ => true,
-            (_, _) => Task.FromResult(true)));
+            _ => canType,
+            (_, _) => Task.FromResult(true),
+            CanDeliver: status => canDeliver,
+            Deliver: (status, text) =>
+                Task.FromResult(new DeliveryReceipt(DeliveryResult.Accepted, "idle"))));
 
         _client = new RemoteMirrorClient(Account, new RemoteMirrorClient.Seams(SendToServerAsync));
         RemoteControlSessions.UseMirrorClientForTests(Account, _client);

@@ -477,7 +477,7 @@ public class LastReachableArmsTests
     {
         Assert.Equal("No terminal to type into",
             LocalCliChatSession.ComposerHintFor(
-                canSendQuietly: false, replyEnabled: true,
+                canSendQuietly: false, canDeliver: false, replyEnabled: true,
                 LocalSessionShape.Terminal, OrbPresence.Present));
     }
 
@@ -488,7 +488,7 @@ public class LastReachableArmsTests
     {
         Assert.Equal("No terminal to type into",
             LocalCliChatSession.ComposerHintFor(
-                canSendQuietly: false, replyEnabled: false,
+                canSendQuietly: false, canDeliver: false, replyEnabled: false,
                 LocalSessionShape.Terminal, OrbPresence.Present));
     }
 
@@ -508,13 +508,13 @@ public class LastReachableArmsTests
     {
         Assert.Equal("Needs input — attach to reply",
             LocalCliChatSession.ComposerHintFor(
-                canSendQuietly: false, replyEnabled: true,
+                canSendQuietly: false, canDeliver: false, replyEnabled: true,
                 LocalSessionShape.Background, OrbPresence.NeedsInput));
 
         // Still the more specific answer than replying-off, for the reason above.
         Assert.Equal("Needs input — attach to reply",
             LocalCliChatSession.ComposerHintFor(
-                canSendQuietly: false, replyEnabled: false,
+                canSendQuietly: false, canDeliver: false, replyEnabled: false,
                 LocalSessionShape.Background, OrbPresence.NeedsInput));
     }
 
@@ -525,7 +525,7 @@ public class LastReachableArmsTests
     {
         Assert.Equal("Finished — attach to read it",
             LocalCliChatSession.ComposerHintFor(
-                canSendQuietly: false, replyEnabled: true,
+                canSendQuietly: false, canDeliver: false, replyEnabled: true,
                 LocalSessionShape.Background, OrbPresence.Finished));
     }
 
@@ -537,7 +537,7 @@ public class LastReachableArmsTests
     {
         Assert.Equal("Attach to reply",
             LocalCliChatSession.ComposerHintFor(
-                canSendQuietly: false, replyEnabled: true,
+                canSendQuietly: false, canDeliver: false, replyEnabled: true,
                 LocalSessionShape.Background, OrbPresence.Present));
     }
 
@@ -550,7 +550,7 @@ public class LastReachableArmsTests
     {
         Assert.Equal("No terminal to type into",
             LocalCliChatSession.ComposerHintFor(
-                canSendQuietly: false, replyEnabled: true,
+                canSendQuietly: false, canDeliver: false, replyEnabled: true,
                 LocalSessionShape.Teammate, OrbPresence.Parked));
     }
 
@@ -566,13 +566,56 @@ public class LastReachableArmsTests
         {
             // A background job that somehow does have a pane — attached, and its
             // hook has since recorded one — is an ordinary session from here on.
+            // canDeliver is asked but must lose to a real pane either way.
             Assert.Equal("Message…",
                 LocalCliChatSession.ComposerHintFor(
-                    canSendQuietly: true, replyEnabled: true, shape, OrbPresence.NeedsInput));
+                    canSendQuietly: true, canDeliver: true, replyEnabled: true, shape, OrbPresence.NeedsInput));
             Assert.Equal("Replying is off",
                 LocalCliChatSession.ComposerHintFor(
-                    canSendQuietly: true, replyEnabled: false, shape, OrbPresence.Present));
+                    canSendQuietly: true, canDeliver: false, replyEnabled: false, shape, OrbPresence.Present));
         }
+    }
+
+    // ---- CB-105: messaging a session that has no pane but a live registry ---
+
+    // The new arm, ahead of every no-pane wording above: a background job or an
+    // agent-mode direct child with a live registry entry has somewhere to go
+    // even though there is no pane, and the hint has to say that rather than
+    // "No terminal to type into" or the daemon-attach wording, neither of which
+    // is true any more once delivery is possible.
+    [Fact]
+    public void ADeliverableSessionIsToldItCanBeMessaged()
+    {
+        Assert.Equal("Message it — it reads this at its next turn",
+            LocalCliChatSession.ComposerHintFor(
+                canSendQuietly: false, canDeliver: true, replyEnabled: true,
+                LocalSessionShape.Terminal, OrbPresence.Present));
+
+        // Still the answer for a background job — canDeliver outranks the
+        // Background-specific wording below it, not just the ordinary one.
+        Assert.Equal("Message it — it reads this at its next turn",
+            LocalCliChatSession.ComposerHintFor(
+                canSendQuietly: false, canDeliver: true, replyEnabled: true,
+                LocalSessionShape.Background, OrbPresence.NeedsInput));
+
+        // And beats replying-off, the same way every no-pane answer already does.
+        Assert.Equal("Message it — it reads this at its next turn",
+            LocalCliChatSession.ComposerHintFor(
+                canSendQuietly: false, canDeliver: true, replyEnabled: false,
+                LocalSessionShape.Terminal, OrbPresence.Present));
+    }
+
+    // A job that has already finished is the one exception: delivering to it
+    // would land in a transcript nothing is going to read, so it keeps the
+    // same "attach and read it" wording a finished job with no registry gets,
+    // rather than inviting a message that goes nowhere.
+    [Fact]
+    public void ADeliverableSessionThatHasFinishedStillSaysToAttach()
+    {
+        Assert.Equal("Finished — attach to read it",
+            LocalCliChatSession.ComposerHintFor(
+                canSendQuietly: false, canDeliver: true, replyEnabled: true,
+                LocalSessionShape.Background, OrbPresence.Finished));
     }
 
     // ---- the notes a refused send leaves -----------------------------------
@@ -630,5 +673,133 @@ public class LastReachableArmsTests
         Assert.Contains("Settings", RemoteControlChatSession.RemoteControlOffNote);
         Assert.Contains("Show sessions from other machines",
             RemoteControlChatSession.RemoteControlOffNote);
+    }
+
+    // ---- CB-105: what the panel says once a delivery attempt has been made ---
+
+    // Mid-turn is worth saying separately from an ordinary accept: "handed to
+    // X" alone reads as done, and it is not — Claude Code queues it behind the
+    // running turn rather than answering it now.
+    [Fact]
+    public void AnAcceptWhileWorkingSaysItWillBeReadWhenTheTurnEnds()
+    {
+        var note = LocalCliChatSession.DeliveryNote(
+            new DeliveryReceipt(DeliveryResult.Accepted, "working"), "job-hunter");
+
+        Assert.Contains("job-hunter", note);
+        Assert.Contains("mid-turn", note);
+    }
+
+    // An ordinary accept — not working, not null — names the session and says
+    // slash commands will not run, since a delivered message is never typed.
+    [Theory]
+    [InlineData("idle")]
+    [InlineData(null)]
+    public void AnOrdinaryAcceptNamesTheSessionAndDisclaimsSlashCommands(string? agentStatus)
+    {
+        var note = LocalCliChatSession.DeliveryNote(
+            new DeliveryReceipt(DeliveryResult.Accepted, agentStatus), "job-hunter");
+
+        Assert.Contains("job-hunter", note);
+        Assert.Contains("slash commands", note);
+        Assert.DoesNotContain("mid-turn", note);
+    }
+
+    [Fact]
+    public void NoRegistryEntryPointsAtTheAttach()
+    {
+        var note = LocalCliChatSession.DeliveryNote(
+            new DeliveryReceipt(DeliveryResult.NoRegistryEntry, null), "job-hunter");
+
+        Assert.Contains("job-hunter", note);
+        Assert.Contains("isn't registered", note);
+        Assert.Contains("Attach it", note);
+    }
+
+    [Fact]
+    public void AnUnsupportedProtocolSaysNothingWasSent()
+    {
+        var note = LocalCliChatSession.DeliveryNote(
+            new DeliveryReceipt(DeliveryResult.UnsupportedProtocol, "idle"), "job-hunter");
+
+        Assert.Contains("job-hunter", note);
+        Assert.Contains("peer protocol", note);
+        Assert.Contains("nothing was sent", note);
+    }
+
+    // SocketRefused and WriteFailed share one wildcard arm: WriteFailed is
+    // never actually produced (see SessionMessenger's own doc comment on the
+    // enum member), so there is nothing to distinguish them for even in
+    // principle.
+    //
+    // Not a [Theory]: DeliveryResult is internal, and a public test method
+    // cannot expose an internal type as one of its own parameters — xUnit
+    // requires test methods to be public, so the two cases are two [Fact]s
+    // instead of one parameterised test.
+    [Fact]
+    public void ARefusedSocketSaysNothingWasSent()
+    {
+        foreach (var result in new[] { DeliveryResult.SocketRefused, DeliveryResult.WriteFailed })
+        {
+            var note = LocalCliChatSession.DeliveryNote(new DeliveryReceipt(result, null), "job-hunter");
+
+            Assert.Contains("refused the connection", note);
+            Assert.Contains("nothing was sent", note);
+        }
+    }
+
+    // Every arm but one names the session, which is the property that
+    // actually matters for the four that do: this text is the only thing on
+    // screen after a delivery did not land the way "sent" would imply.
+    // SocketRefused is the deliberate exception — the socket refused to
+    // connect at all, before anything session-specific was learned, so its
+    // sentence is the generic one ARefusedSocketSaysNothingWasSent already
+    // covers rather than a claim this method cannot back up.
+    [Fact]
+    public void EveryDeliveryNoteThatCanNameTheSessionDoes()
+    {
+        foreach (var (result, agentStatus) in new (DeliveryResult, string?)[]
+                 {
+                     (DeliveryResult.Accepted, "idle"),
+                     (DeliveryResult.Accepted, "working"),
+                     (DeliveryResult.NoRegistryEntry, null),
+                     (DeliveryResult.UnsupportedProtocol, "idle"),
+                 })
+        {
+            Assert.Contains("job-hunter",
+                LocalCliChatSession.DeliveryNote(new DeliveryReceipt(result, agentStatus), "job-hunter"));
+        }
+    }
+
+    // ---- CB-105: unwrapping a delivered message's own echo -------------------
+
+    // What SessionMessageFrame.Wrap actually produces — no from-name, unlike
+    // the relay tag BridgeProtocol.ParseInboundMessages reads — so this is the
+    // shape DeliveredBody has to unwrap on its own.
+    [Fact]
+    public void ADeliveredMessageBodyIsUnwrapped()
+    {
+        var row = "<cross-session-message from=\"Claude Buddy on mini\" from-mode=\"prompting\">\n"
+                  + "check the deploy\n</cross-session-message>";
+
+        Assert.Equal("check the deploy", LocalCliChatSession.DeliveredBody(row));
+    }
+
+    // The shape BridgeProtocol.ParseInboundMessages reads — a from-name
+    // attribute — parses fine here too: this reads the body regardless of
+    // which attributes are present, unlike that parser which requires one.
+    [Fact]
+    public void ARowWithAFromNameAttributeStillUnwraps()
+    {
+        var row = "<cross-session-message from=\"bridge:abc\" from-name=\"job-hunter\" "
+                  + "from-mode=\"prompting\">hello</cross-session-message>";
+
+        Assert.Equal("hello", LocalCliChatSession.DeliveredBody(row));
+    }
+
+    [Fact]
+    public void ARowWithNoTagIsNotABody()
+    {
+        Assert.Null(LocalCliChatSession.DeliveredBody("just an ordinary typed message"));
     }
 }

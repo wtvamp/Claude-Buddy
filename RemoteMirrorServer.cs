@@ -42,6 +42,25 @@ namespace ClaudeBuddy
             Func<SessionStatus, bool> CanType,
             Func<SessionStatus, string, Task<bool>> TypeInto,
 
+            // CB-105's second delivery path: whether this session's far end
+            // can be handed text over its own messaging socket, for a
+            // background or agent-mode job that has no pane at all. Null
+            // (the default) means this server does not know how to ask, and
+            // that has to behave exactly like "no": an older harness, or a
+            // test built before this feature existed, gets the pre-CB-105
+            // behaviour of ErrNoPane unchanged — see InputAsync's own note
+            // and the regression test that pins it,
+            // MirrorRoundTripTests.TypingIsRefusedWhenThereIsNoPaneToTypeInto.
+            Func<SessionStatus, bool>? CanDeliver = null,
+
+            // Actually attempts that delivery, once CanDeliver has said yes.
+            // Kept as a separate delegate rather than folded into one call,
+            // the same split CanType/TypeInto already make: the roster asks
+            // the first question many times a minute and must never touch a
+            // socket to answer it, while this one is the real send and runs
+            // once, against a real INPUT.
+            Func<SessionStatus, string, Task<DeliveryReceipt>>? Deliver = null,
+
             // Whether this peer is allowed to ask anything at all.
             //
             // **A seam because the answer depends on the transport, and the
@@ -199,14 +218,69 @@ namespace ClaudeBuddy
         private static Seams LiveSeams(
             string profileDir,
             Func<string, string, Task<bool>> sendFrame,
-            Func<IReadOnlyList<(string SessionId, SessionStatus Status)>> localSessions) =>
-            new(
+            Func<IReadOnlyList<(string SessionId, SessionStatus Status)>> localSessions)
+        {
+            // Built once per server rather than per call — SessionMessenger
+            // itself is stateless, but constructing it here rather than
+            // inside CanDeliver/Deliver keeps this the same shape as every
+            // other seam above: LiveSeams runs once, at startup, and what it
+            // wires up is what runs on every tick after.
+            var messenger = new SessionMessenger(SessionMessenger.Live(ClaudeConfigRoots.All()));
+
+            // MachineNames.Tag(), not .Mine(): the other CB-105 slice
+            // (LocalCliChatSession.DeliverViaMessengerAsync) already settled
+            // on Tag() for this same "from" identity, and there is no reason
+            // for the two delivery paths to attribute a message differently
+            // depending on which machine's Buddy happened to make the call.
+            var fromName = SessionMessenger.FromName(MachineNames.Tag());
+
+            return new(
                 sendFrame,
                 localSessions,
                 () => AgentRoster.Read(profileDir),
                 source => CliChatFormat.For(source).ReplyEnabled(),
                 status => TerminalFocuser.CanSendQuietly(status),
-                (status, text) => TerminalFocuser.SendTextAndSubmit(status, text));
+                (status, text) => TerminalFocuser.SendTextAndSubmit(status, text),
+                CanDeliver: status => RegistryEntryFor(status) is { } entry && SessionRegistry.Speaks(entry),
+                Deliver: async (status, text) =>
+                {
+                    if (RegistryEntryFor(status) is not { } entry)
+                        return new DeliveryReceipt(DeliveryResult.NoRegistryEntry, null);
+
+                    return await messenger.DeliverAsync(entry.SessionId, fromName, text, CancellationToken.None)
+                        .ConfigureAwait(false);
+                });
+        }
+
+        // The one link back from a SessionStatus to a SessionRegistry.Entry.
+        //
+        // **SessionStatus carries the pid the hook wrote, never Claude
+        // Code's own session id.** SessionMessenger.DeliverAsync needs that
+        // id — it is how SessionRegistry.Find matches a registration — and
+        // nothing upstream of here threads it through: Seams.CanDeliver and
+        // Seams.Deliver both take a bare SessionStatus, the same shape
+        // CanType and TypeInto already take, so this is the one place that
+        // has to bridge the two. Matched on pid, which is the one thing a
+        // registration and a status file agree on without either naming the
+        // other, and confirmed alive through the same PidAlive check
+        // SessionMessenger.Live uses internally, so a registration left
+        // behind by a session that has since exited (its own file is not
+        // always cleaned up on a crash) is not mistaken for a live one.
+        //
+        // Excluded from coverage along with the rest of LiveSeams: it scans
+        // a real registry directory and checks a real process table.
+        [ExcludeFromCodeCoverage]
+        private static SessionRegistry.Entry? RegistryEntryFor(SessionStatus status)
+        {
+            if (status.SessionPid <= 0) return null;
+
+            foreach (var entry in SessionRegistry.Scan(ClaudeConfigRoots.All()))
+            {
+                if (entry.Pid == status.SessionPid && ProcessLiveness.IsRunning(entry.Pid)) return entry;
+            }
+
+            return null;
+        }
 
         // --- serving ---------------------------------------------------------
 
@@ -366,7 +440,8 @@ namespace ClaudeBuddy
                     _seams.CanType(status),
                     string.IsNullOrWhiteSpace(status.Color) ? null : status.Color,
                     Commands(status),
-                    status.State));
+                    status.State,
+                    _seams.CanDeliver?.Invoke(status)));
             }
 
             await SendTransferAsync(
@@ -1091,6 +1166,11 @@ namespace ClaudeBuddy
                 return;
             }
 
+            // Decoded here rather than beside TypeInto below, where this used
+            // to live: the messaging path below needs the same text, and it
+            // is tried before CanType is even asked.
+            var text = Encoding.UTF8.GetString(frame.Payload);
+
             var name = frame.Text("n");
             if (name is null)
             {
@@ -1116,11 +1196,55 @@ namespace ClaudeBuddy
 
             if (!_seams.CanType(status))
             {
+                // No pane to type into is no longer the end of it. A
+                // background or agent-mode job never has a terminal at all,
+                // and CB-105 gives it a second route: this machine's own
+                // SessionMessenger hands the text to that session's own IPC
+                // socket instead.
+                //
+                // Tried only when the seam is actually wired — CanDeliver and
+                // Deliver default to null, and a harness or a build that
+                // predates this feature must behave exactly as it always
+                // has: straight to ErrNoPane, with nothing about this branch
+                // observable. That back-compat guarantee is what
+                // MirrorRoundTripTests.TypingIsRefusedWhenThereIsNoPaneToTypeInto
+                // pins.
+                if (_seams.CanDeliver?.Invoke(status) == true)
+                {
+                    DeliveryReceipt receipt;
+                    try { receipt = await _seams.Deliver!(status, text).ConfigureAwait(false); }
+                    catch
+                    {
+                        // The seam threw rather than answering — a registry
+                        // scan mid-write, a socket that raised instead of
+                        // just refusing. Read the same as SocketRefused:
+                        // nothing reached the far side either way, and the
+                        // caller sees a clean error rather than a connection
+                        // torn down by an unhandled exception.
+                        receipt = new DeliveryReceipt(DeliveryResult.SocketRefused, null);
+                    }
+
+                    if (receipt.Result == DeliveryResult.Accepted)
+                    {
+                        var okFields = new Dictionary<string, string> { ["via"] = MirrorProtocol.ViaMessage };
+                        if (!string.IsNullOrEmpty(receipt.AgentStatus)) okFields["agent"] = receipt.AgentStatus;
+
+                        await SendAsync(fromPeer, MirrorProtocol.BuildFrame(
+                            MirrorProtocol.Ok, frame.Id, okFields)).ConfigureAwait(false);
+                        return;
+                    }
+
+                    var code = receipt.Result == DeliveryResult.NoRegistryEntry
+                        ? MirrorProtocol.ErrNotRegistered
+                        : MirrorProtocol.ErrDeliverFailed;
+
+                    await ErrAsync(fromPeer, frame.Id, code, name).ConfigureAwait(false);
+                    return;
+                }
+
                 await ErrAsync(fromPeer, frame.Id, MirrorProtocol.ErrNoPane, name).ConfigureAwait(false);
                 return;
             }
-
-            var text = Encoding.UTF8.GetString(frame.Payload);
 
             bool typed;
             try { typed = await _seams.TypeInto(status, text).ConfigureAwait(false); }
