@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Text;
 using System.Text.Json;
 using Avalonia.Threading;
 
@@ -2570,6 +2571,77 @@ namespace ClaudeBuddy
                 }
 
                 return bytes;
+            }
+        }
+
+        // CB-93: whether a path the fetch above refused is refused because it
+        // sits outside the gateway's media allowlist, or for some other
+        // reason — asked with `&meta=1` on the same route rather than opened
+        // as a second fetch path, so a refusal is one round trip and not two.
+        //
+        // Cached by path rather than through Media above: a capability
+        // answer is JSON text, not a decoded picture, and Media's cache is
+        // keyed by url for values that are megabytes each — mixing the two
+        // would mean either caching a refusal as an empty byte array
+        // (indistinguishable from "no image") or growing that cache's value
+        // type for a return shape only this caller uses.
+        private static readonly Dictionary<string, string> MediaMeta = new(StringComparer.Ordinal);
+
+        // Excluded from coverage: an HTTP GET against the gateway host, the
+        // same transport FetchMediaAsync above uses and excluded for the same
+        // reason. The decisions that matter — which route to ask, and what
+        // the answer means — live in OpenClawMediaRefusal, which is covered.
+        [ExcludeFromCodeCoverage]
+        public static async Task<string?> FetchLocalMediaMetaAsync(string path, CancellationToken ct)
+        {
+            lock (Gate)
+            {
+                if (MediaMeta.TryGetValue(path, out var cached)) return cached;
+            }
+
+            var host = ClaudeBuddySettings.OpenClawHost;
+            var token = OpenClawIdentity.GatewayTokenFor(host);
+            if (string.IsNullOrWhiteSpace(host) || string.IsNullOrEmpty(token)) return null;
+
+            string? json = null;
+
+            try
+            {
+                var pinned = ClaudeBuddySettings.OpenClawFingerprint;
+
+                var bytes = await OpenClawSocket.GetAsync(
+                    host, ClaudeBuddySettings.OpenClawPort, OpenClawMediaRefusal.MetaRoute(path), token!,
+                    string.IsNullOrEmpty(pinned) ? null : pinned, ct);
+
+                if (bytes is { Length: > 0 }) json = Encoding.UTF8.GetString(bytes);
+            }
+            catch
+            {
+                // A meta answer that never arrives is itself an answer —
+                // OpenClawMediaRefusal.Explain's own fallback line — rather
+                // than something to retry here.
+            }
+
+            lock (Gate)
+            {
+                // Only a real answer is cached, the same rule as Media above
+                // and for the same reason: a refusal (available:false) is one
+                // and is worth caching, because it is a stable fact about the
+                // allowlist rather than a hiccup. What is not cached is the
+                // gateway failing to answer at all — that shouldn't hide the
+                // reason for the rest of the process's life the way caching a
+                // "not now" would.
+                if (string.IsNullOrEmpty(json)) return null;
+
+                MediaMeta[path] = json;
+
+                const int Keep = 24;
+                while (MediaMeta.Count > Keep)
+                {
+                    MediaMeta.Remove(MediaMeta.Keys.First());
+                }
+
+                return json;
             }
         }
 

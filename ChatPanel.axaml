@@ -235,6 +235,21 @@
                                            Cursor="Hand"
                                            PointerPressed="Image_PointerPressed"
                                            HorizontalAlignment="Left"/>
+                                    <!-- CB-93: why a picture that should have
+                                         shown didn't, in the slot the picture
+                                         would have occupied. The tooltip
+                                         carries the path and the gateway's own
+                                         code; the line itself stays one
+                                         sentence so the bubble doesn't grow
+                                         past what today's bare MEDIA: text
+                                         already took. -->
+                                    <TextBlock Text="{Binding ImageNote}"
+                                               IsVisible="{Binding HasImageNote}"
+                                               ToolTip.Tip="{Binding ImageNoteDetail}"
+                                               TextWrapping="Wrap"
+                                               Margin="0,2,0,0"
+                                               FontSize="{Binding TimeSize}" Opacity="0.6"
+                                               Foreground="{Binding Ink}"/>
                                     <!-- Inside the bubble, trailing edge, the
                                          way a messaging app puts it. Hidden on
                                          system lines, which are notes about the

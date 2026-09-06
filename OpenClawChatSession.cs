@@ -311,13 +311,29 @@ namespace ClaudeBuddy
             if (!_pendingImageChecks.Add(turn)) return;
 
             var bytes = await OpenClawSessions.FetchLocalMediaAsync(path, CancellationToken.None);
-            if (bytes is null || bytes.Length == 0) return;
+            if (bytes is { Length: > 0 })
+            {
+                turn.ImageBytes = bytes;
 
-            turn.ImageBytes = bytes;
+                // See TryResolveLiveImage's identical comment: OpenClawRoomChat
+                // needs its own nudge to rebuild, beyond the PropertyChanged the
+                // setter above already raised.
+                TurnUpdated?.Invoke(turn);
+                return;
+            }
 
-            // See TryResolveLiveImage's identical comment: OpenClawRoomChat
-            // needs its own nudge to rebuild, beyond the PropertyChanged the
-            // setter above already raised.
+            // CB-93: the fetch above came back empty, which used to leave the
+            // turn as bare "MEDIA:<path>" text with no explanation. No
+            // ShouldAskWhy guard needed here, unlike TurnView.LoadImage's
+            // history-path twin: this method is only ever reached with a
+            // path LocalMediaPathFrom already matched to the gateway's
+            // read-scoped media route, so there is no ordinary attachment
+            // url to protect against asking a meta question that has no
+            // answer.
+            var json = await OpenClawSessions.FetchLocalMediaMetaAsync(path, CancellationToken.None);
+            turn.ImageNoteDetail = OpenClawMediaRefusal.Detail(json, path);
+            turn.ImageNote = OpenClawMediaRefusal.Explain(json);
+
             TurnUpdated?.Invoke(turn);
         }
 

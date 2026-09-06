@@ -88,6 +88,36 @@ namespace ClaudeBuddy
 
         public string ImageAlt { get; set; } = "";
 
+        private string? _imageNote;
+
+        // Why a picture that should have shown didn't — CB-93. Set once a
+        // resolution attempt comes back empty and the gateway's own &meta=1
+        // answer explains the refusal (see OpenClawMediaRefusal). Null in the
+        // ordinary case where nothing failed, which draws nothing.
+        //
+        // Mutable rather than init-only for the same reason ImageUrl and
+        // ImageBytes are: a turn starts with neither a picture nor a reason,
+        // and gains one once the async resolution — on the live path or the
+        // history path — finishes.
+        public string? ImageNote
+        {
+            get => _imageNote;
+            set
+            {
+                if (_imageNote == value) return;
+                _imageNote = value;
+                Raise();
+            }
+        }
+
+        // The tooltip for ImageNote: the path and the gateway's own code,
+        // kept out of the line itself so the bubble doesn't grow past one
+        // sentence. Plain rather than notifying on its own — always set
+        // immediately before ImageNote, whose Raise() is what tells the view
+        // to look again, the same pairing ImageAlt already has with
+        // ImageBytes/ImageUrl above.
+        public string? ImageNoteDetail { get; set; }
+
         private byte[]? _imageBytes;
 
         // A picture already decoded, for the two cases where there is no

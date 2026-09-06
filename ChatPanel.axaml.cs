@@ -2225,6 +2225,21 @@ namespace ClaudeBuddy
                         LoadImageBytes(lateBytes);
                     }
 
+                    // CB-93: ImageNote and ImageNoteDetail are set together
+                    // (see LoadImage below), but only ImageNote's own setter
+                    // raises a change — ImageNoteDetail is plain, the same
+                    // pairing ChatTurn.ImageAlt already has with
+                    // ImageBytes/ImageUrl. So the one event that does fire
+                    // has to stand in for both bindings, HasImageNote (the
+                    // row's own IsVisible) included.
+                    if (e.PropertyName == nameof(ChatTurn.ImageNote))
+                    {
+                        PropertyChanged?.Invoke(this,
+                            new System.ComponentModel.PropertyChangedEventArgs(nameof(HasImageNote)));
+                        PropertyChanged?.Invoke(this,
+                            new System.ComponentModel.PropertyChangedEventArgs(nameof(ImageNoteDetail)));
+                    }
+
                     PropertyChanged?.Invoke(this, e);
                 };
 
@@ -2472,6 +2487,17 @@ namespace ClaudeBuddy
             private static readonly IBrush QuoteEdge = new SolidColorBrush(Color.Parse("#4DFFFFFF"));
             public bool HasImage => _image is not null;
 
+            // CB-93: why a picture that should have shown didn't, drawn in
+            // the slot it would have occupied. See ChatTurn.ImageNote's own
+            // header for why this is a line rather than a tooltip on the
+            // 📎 marker or a System-turn note appended to the end of the
+            // transcript.
+            public string? ImageNote => _turn.ImageNote;
+
+            public bool HasImageNote => !string.IsNullOrEmpty(_turn.ImageNote);
+
+            public string? ImageNoteDetail => _turn.ImageNoteDetail;
+
             private Bitmap? _image;
             private byte[]? _bytes;
 
@@ -2532,10 +2558,29 @@ namespace ClaudeBuddy
             {
                 if (string.IsNullOrEmpty(_turn.ImageUrl)) return;
 
-                var bytes = await OpenClawSessions.FetchMediaAsync(_turn.ImageUrl!, CancellationToken.None);
-                if (bytes is null || bytes.Length == 0) return;
+                var url = _turn.ImageUrl!;
+                var bytes = await OpenClawSessions.FetchMediaAsync(url, CancellationToken.None);
+                if (bytes is { Length: > 0 })
+                {
+                    await DecodeAndShowAsync(bytes);
+                    return;
+                }
 
-                await DecodeAndShowAsync(bytes);
+                // CB-93: this is the dominant failure site — every reopen,
+                // reconnect and scroll reads history back through here, where
+                // the live path above only fires once per streamed reply. A
+                // path outside the gateway's media allowlist used to leave
+                // this exact row with nothing in it and no explanation.
+                if (!OpenClawMediaRefusal.ShouldAskWhy(bytes, url)) return;
+
+                // Never null here: ShouldAskWhy already confirmed url starts
+                // with AssistantMediaRoute, which is the one thing
+                // PathFromUrl checks before unescaping the rest.
+                var path = OpenClawMediaRefusal.PathFromUrl(url)!;
+
+                var json = await OpenClawSessions.FetchLocalMediaMetaAsync(path, CancellationToken.None);
+                _turn.ImageNoteDetail = OpenClawMediaRefusal.Detail(json, path);
+                _turn.ImageNote = OpenClawMediaRefusal.Explain(json);
             }
 
             // The bytes are already in hand — decoded from a local CLI's own

@@ -212,6 +212,34 @@ public class ChatPanelScreenshots : IDisposable
             ChatPanelTestAccess.Instance!, "chat-panel-undecodable-image.png");
     }
 
+    // CB-93: a picture the gateway refused, with the reason shown rather than
+    // a bare MEDIA: line and no explanation. One ordinary turn above it for
+    // contrast, so the judgement worth reviewing is legible — does the note
+    // read as an aside about this one message, or does it compete with the
+    // conversation around it.
+    [AvaloniaFact]
+    public void APictureTheGatewayRefusedShowsWhy()
+    {
+        var fake = NewFake(new[]
+        {
+            new ChatTurn { Role = ChatRole.User, Text = "can you drop the render in here?" },
+            new ChatTurn
+            {
+                Role = ChatRole.Assistant,
+                Text = "here you go\n\nMEDIA:/Users/warrenthompson/.openclaw/workspace-comfyui-zara/outputs/render.png",
+                ImageNote = "Picture not shown — the gateway won't serve files from that folder. "
+                          + "Ask the agent to write it to ~/.openclaw/media/, which is allowed for every agent.",
+                ImageNoteDetail = "/Users/warrenthompson/.openclaw/workspace-comfyui-zara/outputs/render.png"
+                                + " — outside-allowed-folders",
+            },
+        });
+
+        ChatPanel.OpenFor(NewOrb(), fake);
+        ScreenshotHelper.Flush();
+        ScreenshotHelper.CaptureAlreadyShown(
+            ChatPanelTestAccess.Instance!, "chat-panel-picture-refused.png");
+    }
+
     // A room with everyone in it drawn as themselves — the whole of CB-27 in one
     // picture, and the reason it is a capture rather than only an assertion.
     //
