@@ -253,4 +253,63 @@ public class AccountOrbWindowTests
         // afternoon.
         Assert.Equal("5h 84% · 7d 0%", AccountOrbWindow.Summary(Usage(84.9, 0.4), Now));
     }
+
+    // --- the thought bubble tooltip --------------------------------------
+    // Same guard as OrbWindowUpdateFromTests' own section, and for the same
+    // reason: UpdateFrom used to call ToolTip.SetTip with a brand-new Border
+    // on every poll, whether or not the label/summary had changed. This is a
+    // separate window class from OrbWindow (see the class comment at the top
+    // of this file) and so carried its own, unfixed copy of the same call —
+    // CB-104's first round only touched OrbWindow. An account orb's poll is
+    // five minutes apart (UsagePoller.MinimumInterval) rather than two
+    // seconds, so the same flicker was real here too, just far rarer.
+
+    [AvaloniaFact]
+    public void RepeatedIdenticalUpdatesReuseTheSameTooltipInstance()
+    {
+        var orb = new AccountOrbWindow("k");
+        var usage = Usage();
+
+        orb.UpdateFrom(usage, Now);
+        var first = orb.CurrentThoughtBubble;
+        Assert.NotNull(first);
+
+        // Same label, same summary, same everything the tooltip reads — a
+        // typical re-poll that answered with the same reading as before.
+        orb.UpdateFrom(usage, Now);
+        var second = orb.CurrentThoughtBubble;
+
+        Assert.Same(first, second);
+    }
+
+    [AvaloniaFact]
+    public void ALabelChangeRebuildsTheTooltip()
+    {
+        var orb = new AccountOrbWindow("k");
+
+        orb.UpdateFrom(Usage(label: "board"), Now);
+        var first = orb.CurrentThoughtBubble;
+
+        orb.UpdateFrom(Usage(label: "other"), Now);
+        var second = orb.CurrentThoughtBubble;
+
+        Assert.NotSame(first, second);
+    }
+
+    [AvaloniaFact]
+    public void ASummaryChangeRebuildsTheTooltip()
+    {
+        var orb = new AccountOrbWindow("k");
+
+        orb.UpdateFrom(Usage(session: 20), Now);
+        var first = orb.CurrentThoughtBubble;
+
+        // Same label, but a fresh poll reporting the reading moved — the
+        // tooltip's second line (Summary) changes even though nothing else
+        // about the orb's identity did.
+        orb.UpdateFrom(Usage(session: 21), Now);
+        var second = orb.CurrentThoughtBubble;
+
+        Assert.NotSame(first, second);
+    }
 }

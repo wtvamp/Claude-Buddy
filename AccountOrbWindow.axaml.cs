@@ -70,6 +70,23 @@ namespace ClaudeBuddy
 
         private bool _pinned;
 
+        // The same guard OrbWindow.UpdateFrom carries for its own tooltip
+        // (CB-104): SetTip always builds a fresh Border, and doing that while
+        // the pointer rests on the orb closes and reopens the popup on every
+        // poll — a flicker for as long as the mouse stays still. This class
+        // is a separate window from OrbWindow (see the class comment) and so
+        // has its own copy of the same call, which round one of CB-104 never
+        // touched — an account orb's poll is five minutes apart rather than
+        // two seconds, so the same bug flickered too, just rarely enough to
+        // be missed the first time.
+        private string? _lastTipLabel;
+        private string? _lastTipSummary;
+
+        // Reference identity of the tooltip's current content, for the same
+        // reason OrbWindow.CurrentThoughtBubble exists: a test can assert the
+        // flicker fix without a real popup.
+        internal Control? CurrentThoughtBubble => ToolTip.GetTip(Root) as Control;
+
         public AccountOrbWindow() : this(string.Empty)
         {
         }
@@ -155,7 +172,13 @@ namespace ClaudeBuddy
             ApplyExtra(usage.Extra);
             ApplyCli(usage.Source);
 
-            ToolTip.SetTip(Root, OrbWindow.ThoughtBubble(usage.Label, Summary(usage, now), compact: true));
+            var summary = Summary(usage, now);
+            if (usage.Label != _lastTipLabel || summary != _lastTipSummary)
+            {
+                ToolTip.SetTip(Root, OrbWindow.ThoughtBubble(usage.Label, summary, compact: true));
+                _lastTipLabel = usage.Label;
+                _lastTipSummary = summary;
+            }
         }
 
         private void ApplyCli(AccountUsageSource source)
